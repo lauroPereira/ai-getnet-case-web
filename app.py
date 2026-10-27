@@ -1,11 +1,82 @@
 from __future__ import annotations
 
 import os
+import uuid
 
+import httpx
 import streamlit as st
 
 from getnet_web.api import APIClient, APIError, close_session_client, get_session_client
 from getnet_web.simulated import SimulatedAPI
+
+
+def reset_confirmation_context(context_key, context, *widget_keys):
+    if st.session_state.get(context_key) != context:
+        for widget_key in widget_keys:
+            st.session_state[widget_key] = False
+        st.session_state[context_key] = context
+
+
+def ensure_conversation_id():
+    if not st.session_state.conversation_id:
+        st.session_state.conversation_id = f"conv_{uuid.uuid4().hex[:20]}"
+    return st.session_state.conversation_id
+
+
+def send_chat_message(api, payload, message_text):
+    is_real = api.execution_mode == "real"
+    conversation_id = ensure_conversation_id() if is_real else st.session_state.conversation_id
+    pending = {
+        "conversation_id": conversation_id,
+        "message": message_text,
+        "baseline_message_count": st.session_state.backend_message_count,
+    }
+    if is_real:
+        st.session_state.pending_message = pending
+    try:
+        result = api.send_message(payload | {"conversation_id": conversation_id})
+    except httpx.TransportError:
+        return False
+    except APIError:
+        st.session_state.pending_message = None
+        raise
+
+    reply = result["message"]
+    st.session_state.conversation_id = reply.get("conversation_id") or conversation_id
+    st.session_state.chat_history.extend(
+        [{"role": "user", "text": message_text}, {"role": "assistant", "text": reply["answer"]}]
+    )
+    request_id = reply.get("request_id")
+    if request_id and result.get("run"):
+        st.session_state.latest_run = result["run"] | {"request_id": request_id}
+    if is_real:
+        st.session_state.backend_message_count += 2
+        st.session_state.pending_message = None
+    st.session_state.recovered_without_request_id = False
+    st.session_state.comparison = None
+    return True
+
+
+def find_pending_reply(conversation, pending):
+    messages = conversation.get("messages")
+    baseline = pending["baseline_message_count"]
+    if not isinstance(messages, list) or baseline < 0 or baseline > len(messages):
+        return None
+
+    new_messages = messages[baseline:]
+    merchant_index = next(
+        (index for index, item in enumerate(new_messages) if item.get("role") == "merchant"),
+        None,
+    )
+    if merchant_index is None or new_messages[merchant_index].get("text") != pending["message"]:
+        return None
+
+    for item in new_messages[merchant_index + 1 :]:
+        if item.get("role") == "merchant":
+            return None
+        if item.get("role") == "assistant":
+            return item.get("text")
+    return None
 
 
 def render_agent_configuration(initial_agents, model_catalog, key_prefix):
@@ -75,10 +146,16 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = None
+if "backend_message_count" not in st.session_state:
+    st.session_state.backend_message_count = 0
 if "comparison" not in st.session_state:
     st.session_state.comparison = None
 if "latest_run" not in st.session_state:
     st.session_state.latest_run = None
+if "pending_message" not in st.session_state:
+    st.session_state.pending_message = None
+if "recovered_without_request_id" not in st.session_state:
+    st.session_state.recovered_without_request_id = False
 if "api_token" not in st.session_state:
     st.session_state.api_token = None
 if "api_role" not in st.session_state:
@@ -167,27 +244,59 @@ with chat_tab:
         message_text = st.text_area(
             "Mensagem", key="message_input", height=90, placeholder="Ex.: Quando recebo o valor das minhas vendas?"
         )
-        send = st.form_submit_button("Enviar mensagem", key="send_message")
+        send = st.form_submit_button(
+            "Enviar mensagem",
+            key="send_message",
+            disabled=st.session_state.pending_message is not None,
+        )
     if send and message_text.strip():
         payload = {
             "message": message_text,
-            "conversation_id": st.session_state.conversation_id,
             "profile_id": profile_id,
             "profile_version": profile_version,
             "router_mechanism": mechanism,
         }
         try:
-            result = api.send_message(payload)
-            reply = result["message"]
-            st.session_state.conversation_id = reply["conversation_id"]
-            st.session_state.chat_history.extend(
-                [{"role": "user", "text": message_text}, {"role": "assistant", "text": reply["answer"]}]
-            )
-            st.session_state.latest_run = result["run"] | {"request_id": reply["request_id"]}
-            st.session_state.comparison = None
-            st.rerun()
+            if send_chat_message(api, payload, message_text):
+                st.rerun()
+            else:
+                st.warning("Não foi possível confirmar o envio. A pergunta está pendente; atualize a conversa abaixo.")
         except APIError as exc:
             st.error(f"Falha ao enviar: {exc}. O método selecionado não foi trocado automaticamente.")
+
+    pending = st.session_state.pending_message
+    if pending:
+        st.warning("O envio pode ter sido concluído no backend. A interface não o reenviará automaticamente.")
+        st.write(f"Pergunta pendente: {pending['message']}")
+        if mode != "Real (API)":
+            st.info("Volte ao modo Real (API) para atualizar esta conversa.")
+        elif st.button("Atualizar conversa", key="recover_pending_conversation"):
+            try:
+                conversation = api.conversation(pending["conversation_id"])
+                recovered_answer = find_pending_reply(conversation, pending)
+                if recovered_answer is None:
+                    st.info("Ainda não há resposta nova para esta pergunta. Atualize novamente mais tarde.")
+                else:
+                    st.session_state.chat_history.extend(
+                        [
+                            {"role": "user", "text": pending["message"]},
+                            {"role": "assistant", "text": recovered_answer},
+                        ]
+                    )
+                    st.session_state.pending_message = None
+                    st.session_state.backend_message_count += 2
+                    st.session_state.comparison = None
+                    st.session_state.recovered_without_request_id = True
+                    st.rerun()
+            except APIError as exc:
+                if exc.status_code == 404:
+                    st.info("A conversa ainda não está disponível. A pergunta continua pendente.")
+                else:
+                    st.warning(f"Não foi possível atualizar a conversa (HTTP {exc.status_code}). Tente novamente.")
+            except httpx.TransportError as exc:
+                st.warning(
+                    f"A consulta falhou ({type(exc).__name__}). A pergunta continua pendente; tente atualizar novamente."
+                )
 
 with compare_tab:
     st.write("A comparação chama somente os dois Routers. O atendimento só começa após você usar a decisão.")
@@ -234,27 +343,28 @@ with compare_tab:
                 st.write(f"Rota: `{decision['route']}`")
                 st.write(f"Idioma: `{decision['language']}` · tópico: `{decision['topic']}`")
                 st.write(f"Modelo: `{comparison['decisions'][method]['model']}`")
-        if st.button("Usar esta decisão e iniciar atendimento", key="use_comparison"):
+        if st.button(
+            "Usar esta decisão e iniciar atendimento",
+            key="use_comparison",
+            disabled=st.session_state.pending_message is not None,
+        ):
             selected = comparison["selected_mechanism"]
             try:
-                result = api.send_message(
+                sent = send_chat_message(
+                    api,
                     {
                         "message": comparison["message"],
-                        "conversation_id": st.session_state.conversation_id,
                         "profile_id": profile_id,
                         "profile_version": profile_version,
                         "router_mechanism": selected,
                         "comparison_id": comparison["comparison_id"],
-                    }
+                    },
+                    comparison["message"],
                 )
-                reply = result["message"]
-                st.session_state.conversation_id = reply["conversation_id"]
-                st.session_state.chat_history.extend(
-                    [{"role": "user", "text": comparison["message"]}, {"role": "assistant", "text": reply["answer"]}]
-                )
-                st.session_state.latest_run = result["run"] | {"request_id": reply["request_id"]}
-                st.session_state.comparison = None
-                st.rerun()
+                if sent:
+                    st.rerun()
+                else:
+                    st.warning("Não foi possível confirmar o envio. A pergunta está pendente; atualize a conversa.")
             except APIError as exc:
                 st.error(f"A decisão não foi usada: {exc}")
 
@@ -273,6 +383,8 @@ with inspect_tab:
                 st.error(f"Execução indisponível: {exc}")
     else:
         st.info("Envie uma mensagem para inspecionar a primeira execução.")
+    if st.session_state.recovered_without_request_id:
+        st.caption("Resposta recuperada pela conversa; o ID da execução não foi retornado e não foi inferido.")
 
 if role == "admin":
     with st.expander("Administração de perfis"):
@@ -319,3 +431,201 @@ if role == "admin":
                     st.rerun()
                 except APIError as exc:
                     st.error(f"Publicação recusada: {exc}")
+
+if role == "admin" and mode == "Real (API)":
+    with st.expander("Base de conhecimento versionada"):
+        st.caption("Edite somente orientações fictícias. Cada build cria uma coleção candidata separada.")
+        try:
+            with st.spinner("Carregando documentos e versões..."):
+                kb_documents = api.kb_documents()
+                kb_state = api.kb_versions()
+        except APIError as exc:
+            st.error(f"Não foi possível carregar a base: {exc}")
+            kb_documents, kb_state = [], {"versions": []}
+        if not kb_documents:
+            st.info("Nenhum documento registrado está disponível.")
+        else:
+            labels = {f"{item['title']} · {item['source_kind']}": item for item in kb_documents}
+            selected_doc = st.selectbox("Documento", list(labels), key="kb_document_choice")
+            document = labels[selected_doc]
+            try:
+                with st.spinner("Carregando documento..."):
+                    kb_detail = api.kb_document(document["document_id"])
+            except APIError as exc:
+                kb_detail = None
+                st.error(f"Documento indisponível: {exc}")
+            if kb_detail:
+                st.write(f"Origem: `{kb_detail['source_kind']}` · hash publicado: `{kb_detail['content_hash'][:16]}`")
+                if document["editable"]:
+                    current_draft = kb_detail.get("draft") or {}
+                    draft_rev = current_draft.get("revision", 0)
+                    with st.form("kb_draft_form"):
+                        edited_text = st.text_area(
+                            "Conteúdo fictício", value=current_draft.get("content", kb_detail["content"]), height=260
+                        )
+                        save_draft = st.form_submit_button("Salvar rascunho", disabled=role != "admin")
+                    if save_draft:
+                        try:
+                            saved = api.kb_save_draft(
+                                document["document_id"], {"content": edited_text, "expected_revision": draft_rev}
+                            )
+                            st.session_state.pop("kb_estimate", None)
+                            st.success(f"Rascunho salvo · revisão {saved['revision']}.")
+                            st.rerun()
+                        except APIError as exc:
+                            st.error(f"Rascunho não salvo: {exc}")
+                    if current_draft:
+                        try:
+                            st.code(api.kb_diff(document["document_id"])["diff"], language="diff")
+                        except APIError as exc:
+                            st.error(f"Diff indisponível: {exc}")
+                else:
+                    st.text_area(
+                        "Fonte oficial · somente leitura", value=kb_detail["content"], height=260, disabled=True
+                    )
+
+            revisions = {
+                item["document_id"]: item["draft_revision"]
+                for item in kb_documents
+                if item.get("draft_revision") is not None
+            }
+            if st.button("Estimar candidata", key="kb_estimate_action", disabled=not revisions):
+                with st.spinner("Calculando estimativa sem chamar o modelo..."):
+                    try:
+                        st.session_state.kb_estimate = api.kb_estimate(revisions)
+                    except APIError as exc:
+                        st.session_state.pop("kb_estimate", None)
+                        st.error(f"Estimativa indisponível: {exc}")
+            estimate = st.session_state.get("kb_estimate")
+            if estimate:
+                st.info(
+                    f"{estimate['documents']} documentos · {estimate['chunks']} trechos · "
+                    f"{estimate['embedding_model']} · estimativa US$ {estimate['estimated_cost_usd']:.6f}"
+                )
+                max_cost = st.number_input(
+                    "Teto desta operação (US$)",
+                    min_value=0.0,
+                    max_value=5.0,
+                    value=float(estimate["estimated_cost_usd"]),
+                    format="%.6f",
+                    key="kb_build_max_cost",
+                )
+                reset_confirmation_context(
+                    "kb_build_confirmation_context",
+                    (
+                        estimate["digest"],
+                        estimate["active_version_id"],
+                        tuple(sorted(estimate["revisions"].items())),
+                        float(max_cost),
+                    ),
+                    "kb_confirm_build",
+                )
+                confirmed_build = st.checkbox(
+                    "Confirmo o build e o custo máximo informado",
+                    key="kb_confirm_build",
+                )
+                build_action = st.button(
+                    "Construir candidata",
+                    key="kb_build_action",
+                    disabled=not confirmed_build or max_cost < float(estimate["estimated_cost_usd"]),
+                )
+                if build_action:
+                    try:
+                        with st.spinner("Construindo coleção candidata..."):
+                            candidate = api.kb_build(
+                                {
+                                    "revisions": estimate["revisions"],
+                                    "expected_active_version_id": estimate["active_version_id"],
+                                    "expected_digest": estimate["digest"],
+                                    "confirmed": True,
+                                    "max_cost_usd": max_cost,
+                                }
+                            )
+                        st.success(f"Candidata pronta para teste: {candidate['version_id']} · {candidate['state']}.")
+                        st.session_state.pop("kb_estimate", None)
+                        st.rerun()
+                    except APIError as exc:
+                        st.error(f"Build recusado ou interrompido: {exc}")
+            candidates = [item for item in kb_state.get("versions", []) if item["state"] in ("testing", "ready")]
+            if candidates:
+                candidate = st.selectbox(
+                    "Candidata para testar/ativar",
+                    candidates,
+                    format_func=lambda item: f"{item['version_id']} · {item['state']}",
+                    key="kb_candidate_choice",
+                )
+                test_cap = st.number_input(
+                    "Teto do teste (US$)", min_value=0.0, max_value=5.0, value=0.0, format="%.6f",
+                    key="kb_test_max_cost",
+                )
+                reset_confirmation_context(
+                    "kb_test_confirmation_context",
+                    (candidate["version_id"], kb_state["active_version_id"], float(test_cap)),
+                    "kb_confirm_test",
+                )
+                confirm_test = st.checkbox("Confirmo o teste da candidata", key="kb_confirm_test")
+                test_action = st.button(
+                    "Testar candidata", key="kb_test_action",
+                    disabled=not confirm_test or candidate["state"] not in ("testing", "ready"),
+                )
+                if test_action:
+                    try:
+                        with st.spinner("Testando a candidata..."):
+                            test_result = api.kb_test(
+                                candidate["version_id"], {"confirmed": True, "max_cost_usd": test_cap}
+                            )
+                        st.success(f"Teste concluído · {'aprovado' if test_result['passed'] else 'sem resultado'}.")
+                        st.rerun()
+                    except APIError as exc:
+                        st.error(f"Teste interrompido: {exc}")
+                reset_confirmation_context(
+                    "kb_activate_confirmation_context",
+                    (candidate["version_id"], kb_state["active_version_id"]),
+                    "kb_confirm_activate",
+                )
+                confirm_activate = st.checkbox(
+                    "Confirmo a ativação desta versão",
+                    key="kb_confirm_activate",
+                )
+                activate_action = st.button(
+                    "Ativar versão",
+                    key="kb_activate_action",
+                    disabled=not confirm_activate or not candidate.get("test_result", {}).get("passed"),
+                )
+                if activate_action:
+                    try:
+                        api.kb_activate(
+                            candidate["version_id"],
+                            {"expected_active_version_id": kb_state["active_version_id"], "confirmed": True},
+                        )
+                        st.success("Versão ativada para os próximos atendimentos.")
+                        st.rerun()
+                    except APIError as exc:
+                        st.error(f"Ativação recusada: {exc}")
+            else:
+                st.info("Não há candidatas prontas para testar ou ativar.")
+            if kb_state.get("previous_version_id"):
+                reset_confirmation_context(
+                    "kb_rollback_confirmation_context",
+                    (kb_state["previous_version_id"], kb_state["active_version_id"]),
+                    "kb_confirm_rollback",
+                )
+                confirm_rollback = st.checkbox(
+                    "Confirmo o retorno à versão anterior",
+                    key="kb_confirm_rollback",
+                )
+                rollback_action = st.button(
+                    "Retornar à versão anterior",
+                    key="kb_rollback_action",
+                    disabled=not confirm_rollback,
+                )
+                if rollback_action:
+                    try:
+                        api.kb_rollback(
+                            kb_state["previous_version_id"],
+                            {"expected_active_version_id": kb_state["active_version_id"], "confirmed": True},
+                        )
+                        st.success("Versão anterior restaurada para os próximos atendimentos.")
+                        st.rerun()
+                    except APIError as exc:
+                        st.error(f"Retorno recusado: {exc}")

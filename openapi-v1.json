@@ -3,7 +3,7 @@
   "info": {
     "title": "Getnet Merchant Assistant",
     "description": "Multi-agent support system: Router, Knowledge, Customer Support, Escalation and Personality.",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "paths": {
     "/v1/sessions": {
@@ -154,6 +154,495 @@
             "SessionBearer": []
           }
         ]
+      }
+    },
+    "/v1/kb/documents": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Documents",
+        "operationId": "kb_documents_v1_kb_documents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/kb/documents/{document_id}": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Document",
+        "operationId": "kb_document_v1_kb_documents__document_id__get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/kb/drafts/{document_id}": {
+      "put": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Save Draft",
+        "operationId": "kb_save_draft_v1_kb_drafts__document_id__put",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/kb/drafts/{document_id}/diff": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Diff",
+        "operationId": "kb_diff_v1_kb_drafts__document_id__diff_get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/kb/versions/estimate": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Estimate",
+        "operationId": "kb_estimate_v1_kb_versions_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBEstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/kb/versions": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Versions",
+        "operationId": "kb_versions_v1_kb_versions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Build",
+        "operationId": "kb_build_v1_kb_versions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/kb/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Version",
+        "operationId": "kb_version_v1_kb_versions__version_id__get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/kb/versions/{version_id}/test": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Test",
+        "operationId": "kb_test_v1_kb_versions__version_id__test_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/kb/versions/{version_id}/activate": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Activate",
+        "operationId": "kb_activate_v1_kb_versions__version_id__activate_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/kb/versions/{version_id}/rollback": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Kb Rollback",
+        "operationId": "kb_rollback_v1_kb_versions__version_id__rollback_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/profiles/{profile_id}/draft": {
@@ -558,6 +1047,86 @@
           }
         }
       }
+    },
+    "/traces/{request_id}": {
+      "get": {
+        "tags": [
+          "demo"
+        ],
+        "summary": "Trace",
+        "operationId": "trace_traces__request_id__get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversations/{conversation_id}": {
+      "get": {
+        "tags": [
+          "demo"
+        ],
+        "summary": "Conversation",
+        "operationId": "conversation_conversations__conversation_id__get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -677,6 +1246,120 @@
           "reason"
         ],
         "title": "Handoff"
+      },
+      "KBBuildRequest": {
+        "properties": {
+          "revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Revisions"
+          },
+          "expected_active_version_id": {
+            "type": "string",
+            "title": "Expected Active Version Id"
+          },
+          "expected_digest": {
+            "type": "string",
+            "title": "Expected Digest"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          },
+          "max_cost_usd": {
+            "type": "number",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Max Cost Usd"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_active_version_id",
+          "expected_digest",
+          "confirmed",
+          "max_cost_usd"
+        ],
+        "title": "KBBuildRequest"
+      },
+      "KBDraftRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 65536,
+            "minLength": 1,
+            "title": "Content"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content",
+          "expected_revision"
+        ],
+        "title": "KBDraftRequest"
+      },
+      "KBEstimateRequest": {
+        "properties": {
+          "revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Revisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "KBEstimateRequest"
+      },
+      "KBTestRequest": {
+        "properties": {
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          },
+          "max_cost_usd": {
+            "type": "number",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Max Cost Usd"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirmed",
+          "max_cost_usd"
+        ],
+        "title": "KBTestRequest"
+      },
+      "KBTransitionRequest": {
+        "properties": {
+          "expected_active_version_id": {
+            "type": "string",
+            "title": "Expected Active Version Id"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_active_version_id",
+          "confirmed"
+        ],
+        "title": "KBTransitionRequest"
       },
       "MessageRequest": {
         "properties": {

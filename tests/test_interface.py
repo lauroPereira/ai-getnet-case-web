@@ -14,6 +14,10 @@ from getnet_web.simulated import SimulatedAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _conversation_recovery_fixture():
+    return json.loads((ROOT / "fixtures" / "conversation-recovery-r2.json").read_text(encoding="utf-8"))
+
+
 def test_generated_client_operations_match_openapi_v1_contract():
     schema = json.loads((ROOT / "openapi-v1.json").read_text(encoding="utf-8"))
     operations = {
@@ -23,7 +27,7 @@ def test_generated_client_operations_match_openapi_v1_contract():
         for method, details in path_item.items()
         if method in {"get", "post", "put", "delete"}
     }
-    assert len(OPERATIONS) == 11
+    assert len(OPERATIONS) == 22
     for method, path in OPERATIONS.values():
         assert (method, path) in operations.values()
 
@@ -125,6 +129,25 @@ def test_http_client_updates_a_draft_through_the_generated_operation():
     assert observed[0].method == "PUT"
     assert observed[0].url.path == "/v1/profiles/adjusted/draft"
     assert observed[0].headers["Authorization"] == "Bearer synthetic-session"
+    client.close()
+
+
+def test_kb_client_uses_documented_routes_only_after_explicit_calls():
+    observed = []
+
+    def handle(request):
+        observed.append(request)
+        if request.url.path == "/v1/kb/documents":
+            return httpx.Response(200, json={"documents": []})
+        return httpx.Response(200, json={"digest": "synthetic-digest", "estimated_cost_usd": 0.0})
+
+    client = APIClient("https://backend.invalid", token="synthetic-session", transport=httpx.MockTransport(handle))
+    assert client.kb_documents() == []
+    estimate = client.kb_estimate({"demo:guide": 1})
+    assert estimate["digest"] == "synthetic-digest"
+    assert [request.url.path for request in observed] == ["/v1/kb/documents", "/v1/kb/versions/estimate"]
+    assert observed[1].method == "POST" and b'"revisions"' in observed[1].content
+    assert all(request.headers["Authorization"] == "Bearer synthetic-session" for request in observed)
     client.close()
 
 
@@ -248,3 +271,391 @@ def test_admin_ui_offers_documented_output_token_limit():
     assert not app.exception
     assert app.number_input(key="create_reference_router_output_tokens").min == 16
     assert app.number_input(key="create_reference_router_output_tokens").max == 300
+
+
+def test_kb_confirmation_controls_enable_once_without_form_submission(monkeypatch):
+    class FakeAdminAPI:
+        execution_mode = "real"
+
+        def __init__(self):
+            self.actions = {"estimate": 0, "build": 0, "test": 0, "activate": 0, "rollback": 0}
+            self.active_version_id = "kb_initial"
+            self.previous_version_id = "kb_previous"
+            self.candidate = {
+                "version_id": "kb_candidate_a",
+                "state": "ready",
+                "test_result": {"passed": False},
+            }
+
+        def profiles(self):
+            return SimulatedAPI().profiles()
+
+        def model_catalog(self):
+            return SimulatedAPI().model_catalog()
+
+        def kb_documents(self):
+            return [
+                {
+                    "document_id": "demo:guide",
+                    "title": "Synthetic guide",
+                    "source_kind": "simulated_internal",
+                    "editable": True,
+                    "draft_revision": 2,
+                }
+            ]
+
+        def kb_versions(self):
+            return {
+                "active_version_id": self.active_version_id,
+                "previous_version_id": self.previous_version_id,
+                "versions": [dict(self.candidate)],
+            }
+
+        def kb_document(self, document_id):
+            assert document_id == "demo:guide"
+            return {
+                "document_id": document_id,
+                "source_kind": "simulated_internal",
+                "content": "Published synthetic content",
+                "content_hash": "a" * 64,
+                "draft": {"revision": 2, "content": "Synthetic draft"},
+            }
+
+        def kb_diff(self, document_id):
+            assert document_id == "demo:guide"
+            return {"diff": "- old\\n+ synthetic"}
+
+        def kb_estimate(self, revisions):
+            self.actions["estimate"] += 1
+            return {
+                "digest": "synthetic-digest",
+                "documents": 1,
+                "chunks": 3,
+                "embedding_model": "synthetic-embedder",
+                "estimated_cost_usd": 0.002,
+                "active_version_id": self.active_version_id,
+                "revisions": revisions,
+            }
+
+        def kb_build(self, payload):
+            self.actions["build"] += 1
+            assert payload["confirmed"] is True
+            assert payload["max_cost_usd"] == pytest.approx(0.125)
+            return {"version_id": "kb_candidate_b", "state": "testing"}
+
+        def kb_test(self, version_id, payload):
+            self.actions["test"] += 1
+            assert version_id == self.candidate["version_id"]
+            assert payload["confirmed"] is True
+            assert payload["max_cost_usd"] == pytest.approx(0.11)
+            self.candidate["test_result"] = {"passed": True}
+            self.candidate["state"] = "ready"
+            return {"passed": True}
+
+        def kb_activate(self, version_id, payload):
+            self.actions["activate"] += 1
+            assert version_id == self.candidate["version_id"]
+            assert payload == {"expected_active_version_id": "kb_initial", "confirmed": True}
+            self.previous_version_id, self.active_version_id = self.active_version_id, version_id
+            self.candidate["state"] = "active"
+
+        def kb_rollback(self, version_id, payload):
+            self.actions["rollback"] += 1
+            assert version_id == "kb_initial"
+            assert payload == {"expected_active_version_id": "kb_candidate_a", "confirmed": True}
+            self.previous_version_id, self.active_version_id = self.active_version_id, version_id
+
+    api = FakeAdminAPI()
+    monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: api)
+    app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10)
+    app.session_state["api_token"] = "synthetic-session"
+    app.session_state["api_role"] = "admin"
+    app.run()
+    app.selectbox(key="mode").select("Real (API)").run()
+    assert not app.exception
+
+    app.button(key="kb_estimate_action").click().run()
+    assert api.actions == {"estimate": 1, "build": 0, "test": 0, "activate": 0, "rollback": 0}
+
+    app.number_input(key="kb_build_max_cost").set_value(0.125).run()
+    assert app.button(key="kb_build_action").disabled
+    app.checkbox(key="kb_confirm_build").set_value(True).run()
+    assert not app.exception
+    assert not app.button(key="kb_build_action").disabled
+    assert app.number_input(key="kb_build_max_cost").value == pytest.approx(0.125)
+    assert api.actions["build"] == 0
+    app.number_input(key="kb_build_max_cost").set_value(0.5).run()
+    assert app.checkbox(key="kb_confirm_build").value is False
+    assert app.button(key="kb_build_action").disabled
+    assert app.number_input(key="kb_build_max_cost").value == pytest.approx(0.5)
+    assert api.actions["build"] == 0
+    app.number_input(key="kb_build_max_cost").set_value(0.125).run()
+    assert app.checkbox(key="kb_confirm_build").value is False
+    assert app.button(key="kb_build_action").disabled
+    assert app.number_input(key="kb_build_max_cost").value == pytest.approx(0.125)
+    app.checkbox(key="kb_confirm_build").set_value(True).run()
+    assert not app.button(key="kb_build_action").disabled
+    app.run()
+    assert api.actions["build"] == 0
+    app.button(key="kb_build_action").click().run()
+    assert api.actions["build"] == 1
+
+    assert app.button(key="kb_test_action").disabled is True
+    app.number_input(key="kb_test_max_cost").set_value(0.11).run()
+    app.checkbox(key="kb_confirm_test").set_value(True).run()
+    assert not app.exception
+    assert app.number_input(key="kb_test_max_cost").value == pytest.approx(0.11)
+    assert not app.button(key="kb_test_action").disabled
+    assert api.actions["test"] == 0
+    app.run()
+    assert api.actions["test"] == 0
+    app.button(key="kb_test_action").click().run()
+    assert api.actions["test"] == 1
+
+    assert app.button(key="kb_activate_action").disabled is True
+    app.checkbox(key="kb_confirm_activate").set_value(True).run()
+    assert not app.exception
+    assert not app.button(key="kb_activate_action").disabled
+    assert api.actions["activate"] == 0
+    app.run()
+    assert api.actions["activate"] == 0
+    app.button(key="kb_activate_action").click().run()
+    assert api.actions["activate"] == 1
+
+    app.checkbox(key="kb_confirm_rollback").set_value(True).run()
+    assert not app.exception
+    assert not app.button(key="kb_rollback_action").disabled
+    assert api.actions["rollback"] == 0
+    app.run()
+    assert api.actions["rollback"] == 0
+    app.button(key="kb_rollback_action").click().run()
+    assert api.actions["rollback"] == 1
+
+
+def test_transport_failure_logs_only_sanitized_http_measurements(caplog):
+    def handle(request):
+        raise httpx.ReadTimeout("private request text and token", request=request)
+
+    client = APIClient(
+        "https://backend.invalid",
+        token="synthetic-secret-token",
+        transport=httpx.MockTransport(handle),
+    )
+    with caplog.at_level("WARNING", logger="getnet_web.http"), pytest.raises(httpx.ReadTimeout):
+        client.send_message(
+            {
+                "message": "private synthetic question",
+                "profile_id": "reference",
+                "profile_version": 1,
+                "router_mechanism": "llm",
+            }
+        )
+    event = next(record.event for record in caplog.records if record.name == "getnet_web.http")
+    assert event["operation"] == "send_v1_message"
+    assert event["duration_ms"] >= 0
+    assert event["error_class"] == "ReadTimeout"
+    assert "private request text" not in caplog.text
+    assert "synthetic-secret-token" not in caplog.text
+    assert "private synthetic question" not in caplog.text
+    client.close()
+
+
+def _real_app_with_fake_chat_api(
+    monkeypatch, api, *, conversation_id=None, chat_history=None, backend_message_count=0
+):
+    monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: api)
+    app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10)
+    app.session_state["api_token"] = "synthetic-session"
+    app.session_state["api_role"] = "demo"
+    app.session_state["conversation_id"] = conversation_id
+    app.session_state["backend_message_count"] = backend_message_count
+    if chat_history is not None:
+        app.session_state["chat_history"] = [dict(item) for item in chat_history]
+    app.run()
+    app.selectbox(key="mode").select("Real (API)").run()
+    assert not app.exception
+    return app
+
+
+def test_first_send_id_survives_transport_failure_and_manual_get_recovers(monkeypatch):
+    class FakeChatAPI:
+        execution_mode = "real"
+
+        def __init__(self):
+            self.posts = []
+            self.gets = []
+            self.pending_question = None
+
+        def profiles(self):
+            return SimulatedAPI().profiles()
+
+        def send_message(self, payload):
+            self.posts.append(dict(payload))
+            self.pending_question = payload["message"]
+            raise httpx.ReadTimeout("synthetic timeout")
+
+        def conversation(self, conversation_id):
+            self.gets.append(conversation_id)
+            if len(self.gets) == 1:
+                raise APIError(404, "not_found", "Conversation not found.")
+            if len(self.gets) == 2:
+                body = _conversation_recovery_fixture()
+                return {**body, "messages": []}
+            return _conversation_recovery_fixture()
+
+    api = FakeChatAPI()
+    simulated_history = [
+        {"role": "user", "text": "Pergunta anterior no modo simulado"},
+        {"role": "assistant", "text": "Resposta antiga simulada"},
+    ]
+    app = _real_app_with_fake_chat_api(monkeypatch, api, chat_history=simulated_history)
+    question = _conversation_recovery_fixture()["messages"][0]["text"]
+    app.text_area(key="message_input").set_value(question)
+    app.button(key="send_message").click().run()
+
+    conversation_id = app.session_state["conversation_id"]
+    assert conversation_id.startswith("conv_") and 8 <= len(conversation_id.removeprefix("conv_")) <= 40
+    assert api.posts == [
+        {
+            "message": question,
+            "profile_id": "reference",
+            "profile_version": 1,
+            "router_mechanism": "llm",
+            "conversation_id": conversation_id,
+        }
+    ]
+    assert app.session_state["pending_message"] == {
+        "conversation_id": conversation_id,
+        "message": question,
+        "baseline_message_count": 0,
+    }
+    assert app.session_state["latest_run"] is None
+    assert not app.exception
+    app.run()
+    assert len(api.posts) == 1 and not api.gets
+    app.selectbox(key="mode").select("Simulado").run()
+    assert len(api.posts) == 1 and not api.gets
+    assert not any(button.key == "recover_pending_conversation" for button in app.button)
+    app.selectbox(key="mode").select("Real (API)").run()
+    assert len(api.posts) == 1 and not api.gets
+
+    app.button(key="recover_pending_conversation").click().run()
+    assert len(api.posts) == 1 and api.gets == [conversation_id]
+    assert app.session_state["pending_message"] is not None
+    assert any("ainda não está disponível" in str(item.value).lower() for item in app.info)
+    app.run()
+    assert len(api.posts) == 1 and len(api.gets) == 1
+
+    app.button(key="recover_pending_conversation").click().run()
+    assert len(api.posts) == 1 and len(api.gets) == 2
+    assert app.session_state["pending_message"] is not None
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+
+    app.button(key="recover_pending_conversation").click().run()
+    assert len(api.posts) == 1 and len(api.gets) == 3
+    assert app.session_state["pending_message"] is None
+    assert app.session_state["latest_run"] is None
+    assert app.session_state["recovered_without_request_id"] is True
+    assert app.session_state["chat_history"] == simulated_history + [
+        {"role": "user", "text": question},
+        {"role": "assistant", "text": "Resposta sintética persistida no histórico."},
+    ]
+    assert any("Resposta sintética persistida no histórico." in str(item.value) for item in app.markdown)
+    assert not app.exception
+    app.run()
+    assert len(api.posts) == 1 and len(api.gets) == 3
+
+
+def test_recovery_does_not_present_old_answer_for_pending_question(monkeypatch):
+    old_history = [
+        {"role": "user", "text": "Pergunta antiga"},
+        {"role": "assistant", "text": "Resposta antiga"},
+    ]
+    backend_old_history = [
+        {"role": "merchant", "text": "Pergunta antiga", "route": "knowledge", "status": None, "created_at": "2026-10-27T11:59:00+00:00"},
+        {"role": "assistant", "text": "Resposta antiga", "route": "knowledge", "status": "answered", "created_at": "2026-10-27T11:59:01+00:00"},
+    ]
+    recovery_body = _conversation_recovery_fixture()
+    question = recovery_body["messages"][0]["text"]
+
+    class FakeChatAPI:
+        execution_mode = "real"
+
+        def __init__(self):
+            self.posts = []
+            self.gets = []
+
+        def profiles(self):
+            return SimulatedAPI().profiles()
+
+        def send_message(self, payload):
+            self.posts.append(dict(payload))
+            raise httpx.ReadTimeout("synthetic timeout")
+
+        def conversation(self, conversation_id):
+            self.gets.append(conversation_id)
+            if len(self.gets) == 1:
+                raise httpx.ReadTimeout("synthetic GET timeout")
+            if len(self.gets) == 2:
+                return {**recovery_body, "messages": backend_old_history}
+            return {**recovery_body, "messages": backend_old_history + recovery_body["messages"]}
+
+    api = FakeChatAPI()
+    app = _real_app_with_fake_chat_api(
+        monkeypatch,
+        api,
+        conversation_id="conv_existing12345",
+        chat_history=old_history,
+        backend_message_count=len(old_history),
+    )
+    app.text_area(key="message_input").set_value(question)
+    app.button(key="send_message").click().run()
+    assert len(api.posts) == 1
+    assert api.posts[0]["conversation_id"] == "conv_existing12345"
+    assert app.session_state["pending_message"]["baseline_message_count"] == len(old_history)
+
+    app.button(key="recover_pending_conversation").click().run()
+    assert len(api.posts) == 1 and len(api.gets) == 1
+    assert app.session_state["pending_message"] is not None
+    assert any("consulta falhou" in str(item.value).lower() for item in app.warning)
+
+    app.button(key="recover_pending_conversation").click().run()
+    assert len(api.posts) == 1 and len(api.gets) == 2
+    assert app.session_state["pending_message"] is not None
+    assert app.session_state["chat_history"] == old_history
+    assert "Resposta antiga recuperada" not in " ".join(str(item.value) for item in app.markdown)
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+
+    app.button(key="recover_pending_conversation").click().run()
+    assert len(api.posts) == 1 and len(api.gets) == 3
+    assert app.session_state["pending_message"] is None
+    assert app.session_state["chat_history"] == old_history + [
+        {"role": "user", "text": question},
+        {"role": "assistant", "text": "Resposta sintética persistida no histórico."},
+    ]
+    assert app.session_state["backend_message_count"] == len(old_history) + 2
+    assert not app.exception
+
+
+def test_conversation_recovery_uses_existing_get_route_only():
+    observed = []
+    recovery_body = _conversation_recovery_fixture()
+
+    def handle(request):
+        observed.append(request)
+        return httpx.Response(200, json=recovery_body)
+
+    client = APIClient(
+        "https://backend.invalid",
+        token="synthetic-session",
+        transport=httpx.MockTransport(handle),
+    )
+    assert client.conversation("conv_synthetic1234") == recovery_body
+    assert [item["role"] for item in recovery_body["messages"]] == ["merchant", "assistant"]
+    assert all(set(item) == {"role", "text", "route", "status", "created_at"} for item in recovery_body["messages"])
+    assert len(observed) == 1
+    assert observed[0].method == "GET"
+    assert observed[0].url.path == "/v1/conversations/conv_synthetic1234"
+    assert observed[0].content == b""
+    assert observed[0].headers["Authorization"] == "Bearer synthetic-session"
+    client.close()
