@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Protocol
 
 import httpx
 
 from getnet_web.generated_api import OPERATIONS
+
+log = logging.getLogger("getnet_web.http")
 
 
 class APIError(RuntimeError):
@@ -30,6 +34,16 @@ class API(Protocol):
     def create_profile(self, payload: dict) -> dict: ...
     def update_profile(self, profile_id: str, payload: dict) -> dict: ...
     def publish_profile(self, profile_id: str, expected_version: int) -> dict: ...
+    def kb_documents(self) -> list[dict]: ...
+    def kb_document(self, document_id: str) -> dict: ...
+    def kb_save_draft(self, document_id: str, payload: dict) -> dict: ...
+    def kb_diff(self, document_id: str) -> dict: ...
+    def kb_estimate(self, revisions: dict) -> dict: ...
+    def kb_build(self, payload: dict) -> dict: ...
+    def kb_versions(self) -> dict: ...
+    def kb_test(self, version_id: str, payload: dict) -> dict: ...
+    def kb_activate(self, version_id: str, payload: dict) -> dict: ...
+    def kb_rollback(self, version_id: str, payload: dict) -> dict: ...
 
 
 class APIClient:
@@ -53,7 +67,21 @@ class APIClient:
         headers = {}
         if authenticated and self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        response = self._http.request(method, route, json=body, headers=headers)
+        started = time.perf_counter()
+        try:
+            response = self._http.request(method, route, json=body, headers=headers)
+        except httpx.TransportError as exc:
+            log.warning(
+                "Backend HTTP transport failed",
+                extra={
+                    "event": {
+                        "operation": operation,
+                        "duration_ms": round((time.perf_counter() - started) * 1000),
+                        "error_class": type(exc).__name__,
+                    }
+                },
+            )
+            raise
         if response.status_code >= 400:
             data = response.json()
             error = data.get("error", {})
@@ -99,6 +127,36 @@ class APIClient:
         return self._request(
             "publish_profile", path_params={"profile_id": profile_id}, body={"expected_version": expected_version}
         )
+
+    def kb_documents(self) -> list[dict]:
+        return self._request("kb_documents")["documents"]
+
+    def kb_document(self, document_id: str) -> dict:
+        return self._request("kb_document", path_params={"document_id": document_id})
+
+    def kb_save_draft(self, document_id: str, payload: dict) -> dict:
+        return self._request("kb_save_draft", path_params={"document_id": document_id}, body=payload)
+
+    def kb_diff(self, document_id: str) -> dict:
+        return self._request("kb_diff", path_params={"document_id": document_id})
+
+    def kb_estimate(self, revisions: dict) -> dict:
+        return self._request("kb_estimate", body={"revisions": revisions})
+
+    def kb_build(self, payload: dict) -> dict:
+        return self._request("kb_build", body=payload)
+
+    def kb_versions(self) -> dict:
+        return self._request("kb_versions")
+
+    def kb_test(self, version_id: str, payload: dict) -> dict:
+        return self._request("kb_test", path_params={"version_id": version_id}, body=payload)
+
+    def kb_activate(self, version_id: str, payload: dict) -> dict:
+        return self._request("kb_activate", path_params={"version_id": version_id}, body=payload)
+
+    def kb_rollback(self, version_id: str, payload: dict) -> dict:
+        return self._request("kb_rollback", path_params={"version_id": version_id}, body=payload)
 
 
 def get_session_client(state: Any, base_url: str, token: str, *, factory=APIClient) -> APIClient:

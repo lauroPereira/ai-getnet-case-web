@@ -1,0 +1,29 @@
+{
+  "conversation_id": "conv_synthetic_recovery_2026",
+  "customer_id": "cust_synthetic_001",
+  "state": "answered",
+  "topic": "knowledge",
+  "technical_cycles": 1,
+  "resolution_evidence": null,
+  "prefix_topic": "synthetic-topic",
+  "prefix_at": "2026-10-27T12:00:00+00:00",
+  "created_at": "2026-10-27T12:00:00+00:00",
+  "updated_at": "2026-10-27T12:00:01+00:00",
+  "messages": [
+    {
+      "role": "merchant",
+      "text": "Pergunta sintética para recuperação manual.",
+      "route": "knowledge",
+      "status": null,
+      "created_at": "2026-10-27T12:00:00+00:00"
+    },
+    {
+      "role": "assistant",
+      "text": "Resposta sintética persistida no histórico.",
+      "route": "knowledge",
+      "status": "answered",
+      "created_at": "2026-10-27T12:00:01+00:00"
+    }
+  ],
+  "attempts": []
+}

@@ -18,6 +18,17 @@ ALIASES = {
     "send_v1_message": "messages_v1_v1_messages_post",
     "get_run": "run_v1_runs__request_id__get",
     "get_conversation": "conversation_v1_conversations__conversation_id__get",
+    "kb_documents": "kb_documents_v1_kb_documents_get",
+    "kb_document": "kb_document_v1_kb_documents__document_id__get",
+    "kb_save_draft": "kb_save_draft_v1_kb_drafts__document_id__put",
+    "kb_diff": "kb_diff_v1_kb_drafts__document_id__diff_get",
+    "kb_estimate": "kb_estimate_v1_kb_versions_estimate_post",
+    "kb_build": "kb_build_v1_kb_versions_post",
+    "kb_versions": "kb_versions_v1_kb_versions_get",
+    "kb_version": "kb_version_v1_kb_versions__version_id__get",
+    "kb_test": "kb_test_v1_kb_versions__version_id__test_post",
+    "kb_activate": "kb_activate_v1_kb_versions__version_id__activate_post",
+    "kb_rollback": "kb_rollback_v1_kb_versions__version_id__rollback_post",
 }
 
 schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
