@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "template_name": "ai-dev-template",
+  "template_version": "0.2.0",
+  "description": "Base independente da interface Streamlit ai-getnet-case-web.",
+  "managed_paths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".claude/skills",
+    ".agents/skills",
+    "skills",
+    "docs/templates",
+    "docs/wiki/agents",
+    "docs/historias/README.md",
+    "docs/evidence/README.md",
+    "docs/specs/README.md",
+    "docs/tasks/README.md",
+    "docs/architecture/README.md",
+    "docs/architecture/decisions/.gitkeep",
+    "evals/tasks",
+    "evals/expected",
+    "tools/scripts"
+  ],
+  "project_owned_paths": [
+    "README.md",
+    "src",
+    "backend",
+    "frontend",
+    "tests",
+    "docs/specs/*.md",
+    "docs/tasks/*.md",
+    "docs/historias/*.md",
+    "docs/evidence/*",
+    "docs/wiki/origem-template.md",
+    "docs/architecture/decisions/*.md"
+  ],
+  "optional_components": [
+    "docker-compose.yml",
+    "frontend",
+    "backend",
+    "sdd"
+  ],
+  "update_policy": "explicit-review-required"
+}
