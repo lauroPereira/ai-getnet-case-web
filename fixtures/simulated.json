@@ -1,0 +1,15 @@
+{"profiles": [
+  {"profile_id": "reference", "name": "Referência", "version": 1, "state": "published", "demo_allowed": true,
+   "agents": {"router": {"provider": "openai", "model": "gpt-6-luna"}}},
+  {"profile_id": "hybrid", "name": "Híbrido", "version": 1, "state": "published", "demo_allowed": true,
+   "agents": {"router": {"provider": "deepseek", "model": "deepseek-flash"}}}
+],
+"comparison": {"decisions": {
+  "llm": {"decision": {"route": "support", "language": "pt", "topic": "device", "intents": [], "safety": "none", "clarification_question": null, "case_signal": "none"}, "model": "simulated-llm", "usage": {"input_tokens": 0, "output_tokens": 0}, "cost_estimate_usd": 0.0},
+  "jev": {"decision": {"route": "knowledge", "language": "pt", "topic": null, "intents": [], "safety": "none", "clarification_question": null, "case_signal": "none"}, "model": "simulated-jev-1.14.0", "usage": {"input_tokens": 0, "output_tokens": 0}, "cost_estimate_usd": 0.0}},
+  "expires_at": "2030-01-01T00:00:00+00:00"},
+"message": {"message": {"answer": "", "status": "answered", "route": "support", "agents": [], "language": "pt", "sources": [], "request_id": "req_simulated_latest", "conversation_id": "conv_simulated00000001", "resolution": {"state": "awaiting_customer"}, "handoff": null},
+  "run": {"profile_id": "reference", "profile_version": 1, "profile_digest": "fixture", "agents": {}, "models": {"router": "simulated"}, "router_mechanism": "llm", "prompt_versions": {"router": "router.v5"}, "knowledge_base": "fixture", "execution_mode": "simulated", "comparison_id": null}},
+"conversation": {"state": "in_progress", "messages": []},
+"draft": {"profile_id": "profile_simulated", "version": 1, "state": "draft"},
+"published": {"profile_id": "profile_simulated", "version": 1, "state": "published"}}

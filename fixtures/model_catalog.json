@@ -1,0 +1,39 @@
+{
+  "verified_at": "2026-10-27",
+  "models": [
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "agents": ["router", "knowledge", "support", "escalation", "personality", "evaluation"],
+      "parameters": {
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum_by_agent": {"router": 300, "knowledge": 500, "support": 1200, "escalation": 400, "personality": 600},
+          "description": "Upper bound for generated and reasoning tokens; application values only lower existing agent caps.",
+          "documentation_url": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "agents": ["router", "support", "escalation", "personality", "evaluation"],
+      "parameters": {
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum_by_agent": {"router": 300, "support": 1200, "escalation": 400, "personality": 600},
+          "description": "Upper bound for generated and reasoning tokens; application values only lower existing agent caps.",
+          "documentation_url": "https://api-docs.deepseek.com/api/create-response/"
+        }
+      }
+    },
+    {
+      "provider": "typesafe",
+      "model": "jev-1.14.0",
+      "agents": ["router"],
+      "parameters": {}
+    }
+  ]
+}

@@ -1,0 +1,1245 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Getnet Merchant Assistant",
+    "description": "Multi-agent support system: Router, Knowledge, Customer Support, Escalation and Personality.",
+    "version": "0.4.0"
+  },
+  "paths": {
+    "/v1/sessions": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Create Session",
+        "operationId": "create_session_v1_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/current": {
+      "delete": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Revoke Session",
+        "operationId": "revoke_session_v1_sessions_current_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/catalog/models": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Model Catalog",
+        "operationId": "model_catalog_v1_catalog_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/profiles": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Profiles",
+        "operationId": "profiles_v1_profiles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Profiles Create",
+        "operationId": "profiles_create_v1_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/profiles/{profile_id}/draft": {
+      "put": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Profiles Update",
+        "operationId": "profiles_update_v1_profiles__profile_id__draft_put",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profile_id}/publish": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Profiles Publish",
+        "operationId": "profiles_publish_v1_profiles__profile_id__publish_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/router/compare": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Compare",
+        "operationId": "compare_v1_router_compare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Messages V1",
+        "operationId": "messages_v1_v1_messages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V1MessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{request_id}": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Run",
+        "operationId": "run_v1_runs__request_id__get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Conversation",
+        "operationId": "conversation_v1_conversations__conversation_id__get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Ready",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/messages": {
+      "post": {
+        "tags": [
+          "assistant"
+        ],
+        "summary": "Messages",
+        "operationId": "messages_messages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CompareRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^conv_[A-Za-z0-9]{8,40}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "profile_id": {
+            "type": "string",
+            "title": "Profile Id"
+          },
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Profile Version"
+          },
+          "selected_mechanism": {
+            "type": "string",
+            "pattern": "^(llm|jev)$",
+            "title": "Selected Mechanism"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "profile_id",
+          "profile_version",
+          "selected_mechanism"
+        ],
+        "title": "CompareRequest"
+      },
+      "ErrorBody": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorDetail"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Handoff": {
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "title": "Protocol"
+          },
+          "simulated": {
+            "type": "boolean",
+            "title": "Simulated",
+            "default": true
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "protocol",
+          "reason"
+        ],
+        "title": "Handoff"
+      },
+      "MessageRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message",
+            "description": "Merchant message, in Portuguese or English."
+          },
+          "user_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_\\-.]{1,64}$",
+            "title": "User Id",
+            "description": "Synthetic merchant identifier for the demo scenario. It does not prove identity."
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^conv_[A-Za-z0-9]{8,40}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "user_id"
+        ],
+        "title": "MessageRequest",
+        "examples": [
+          {
+            "message": "What's the difference between the Get Clássica and the Get Smart?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "What's the weather forecast in Porto Alegre tomorrow?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "When will the money from yesterday's sales be deposited?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "Do I need a bank account to receive my sales via Pix?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "My card machine won't connect to the internet, what should I do?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "How does receivables advance (antecipação) work with Getnet?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "What's the euro exchange rate today?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "My card machine is showing a transaction decline error.",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "How many installments can I split a sale into with the crediário?",
+            "user_id": "cliente1988"
+          },
+          {
+            "message": "Can I sell through WhatsApp using the Payment Link?",
+            "user_id": "cliente1988"
+          }
+        ]
+      },
+      "MessageResponse": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "answered",
+              "needs_clarification",
+              "handoff",
+              "refused"
+            ],
+            "title": "Status"
+          },
+          "route": {
+            "type": "string",
+            "enum": [
+              "knowledge",
+              "support",
+              "knowledge_and_support",
+              "general_web",
+              "clarify",
+              "human_handoff",
+              "out_of_scope",
+              "acknowledgement"
+            ],
+            "title": "Route"
+          },
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "pt",
+              "en"
+            ],
+            "title": "Language"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/Resolution"
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Handoff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "answer",
+          "status",
+          "route",
+          "agents",
+          "language",
+          "request_id",
+          "conversation_id",
+          "resolution"
+        ],
+        "title": "MessageResponse"
+      },
+      "ModelCatalogItem": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelParameterSpec"
+            },
+            "type": "object",
+            "title": "Parameters"
+          },
+          "price": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Price"
+          },
+          "price_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Tier"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "agents",
+          "capabilities",
+          "parameters",
+          "price",
+          "price_tier",
+          "model_version"
+        ],
+        "title": "ModelCatalogItem"
+      },
+      "ModelCatalogResponse": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCatalogItem"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "verified_at": {
+            "type": "string",
+            "title": "Verified At"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "models",
+          "verified_at",
+          "sources"
+        ],
+        "title": "ModelCatalogResponse"
+      },
+      "ModelParameterSpec": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "integer",
+            "title": "Type"
+          },
+          "minimum": {
+            "type": "integer",
+            "title": "Minimum"
+          },
+          "maximum_by_agent": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Maximum By Agent"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "documentation_url": {
+            "type": "string",
+            "title": "Documentation Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "minimum",
+          "maximum_by_agent",
+          "description",
+          "documentation_url"
+        ],
+        "title": "ModelParameterSpec"
+      },
+      "ProfileCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "agents": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agents"
+          },
+          "demo_allowed": {
+            "type": "boolean",
+            "title": "Demo Allowed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "agents"
+        ],
+        "title": "ProfileCreateRequest"
+      },
+      "ProfileDraftRequest": {
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          },
+          "agents": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version",
+          "agents"
+        ],
+        "title": "ProfileDraftRequest"
+      },
+      "PublishRequest": {
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version"
+        ],
+        "title": "PublishRequest"
+      },
+      "Resolution": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "awaiting_customer",
+              "resolved",
+              "handoff"
+            ],
+            "title": "State"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "customer_confirmed",
+                  "tool_verified"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "Resolution"
+      },
+      "SessionRequest": {
+        "properties": {
+          "access_key": {
+            "type": "string",
+            "format": "password",
+            "title": "Access Key",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_key"
+        ],
+        "title": "SessionRequest"
+      },
+      "Source": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "official",
+              "demo_procedure",
+              "web",
+              "tool"
+            ],
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "title"
+        ],
+        "title": "Source"
+      },
+      "V1MessageRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^conv_[A-Za-z0-9]{8,40}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "profile_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Profile Id"
+          },
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Profile Version"
+          },
+          "router_mechanism": {
+            "type": "string",
+            "pattern": "^(llm|jev)$",
+            "title": "Router Mechanism"
+          },
+          "comparison_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparison Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "profile_id",
+          "profile_version",
+          "router_mechanism"
+        ],
+        "title": "V1MessageRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "SessionBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

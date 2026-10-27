@@ -1,0 +1,13 @@
+{"profiles": [
+  {"profile_id": "reference", "name": "Referência", "version": 1, "state": "published", "demo_allowed": true,
+   "agents": {"router": {"provider": "openai", "model": "gpt-6-luna"}}}
+],
+"comparison": {"decisions": {
+  "llm": {"decision": {"route": "knowledge", "language": "pt", "topic": null, "intents": [], "safety": "none", "clarification_question": null, "case_signal": "none"}, "model": "recorded-llm", "usage": {"input_tokens": 0, "output_tokens": 0}, "cost_estimate_usd": 0.0},
+  "jev": {"decision": {"route": "knowledge", "language": "pt", "topic": null, "intents": [], "safety": "none", "clarification_question": null, "case_signal": "none"}, "model": "recorded-jev", "usage": {"input_tokens": 0, "output_tokens": 0}, "cost_estimate_usd": 0.0}},
+  "expires_at": "2030-01-01T00:00:00+00:00"},
+"message": {"message": {"answer": "As vendas são depositadas conforme o plano cadastrado.", "status": "answered", "route": "knowledge", "agents": ["router", "knowledge", "personality"], "language": "pt", "sources": [], "request_id": "req_simulated_latest", "conversation_id": "conv_simulated00000001", "resolution": {"state": "awaiting_customer"}, "handoff": null},
+  "run": {"profile_id": "reference", "profile_version": 1, "profile_digest": "fixture", "agents": {}, "models": {"router": "recorded"}, "router_mechanism": "llm", "prompt_versions": {"router": "router.v5"}, "knowledge_base": "fixture", "execution_mode": "recorded", "comparison_id": null}},
+"conversation": {"state": "in_progress", "messages": []},
+"draft": {"profile_id": "profile_recorded", "version": 1, "state": "draft"},
+"published": {"profile_id": "profile_recorded", "version": 1, "state": "published"}}
