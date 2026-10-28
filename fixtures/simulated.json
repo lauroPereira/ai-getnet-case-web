@@ -2,6 +2,8 @@
   {"profile_id": "reference", "name": "Referência", "version": 1, "state": "published", "demo_allowed": true,
    "agents": {"router": {"provider": "openai", "model": "gpt-6-luna"}}},
   {"profile_id": "hybrid", "name": "Híbrido", "version": 1, "state": "published", "demo_allowed": true,
+   "agents": {"router": {"provider": "deepseek", "model": "deepseek-flash"}}},
+  {"profile_id": "adjusted", "name": "Ajustado", "version": 1, "state": "published", "demo_allowed": true,
    "agents": {"router": {"provider": "deepseek", "model": "deepseek-flash"}}}
 ],
 "comparison": {"decisions": {

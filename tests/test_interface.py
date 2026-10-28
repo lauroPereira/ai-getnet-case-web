@@ -27,7 +27,7 @@ def test_generated_client_operations_match_openapi_v1_contract():
         for method, details in path_item.items()
         if method in {"get", "post", "put", "delete"}
     }
-    assert len(OPERATIONS) == 22
+    assert len(OPERATIONS) == 28
     for method, path in OPERATIONS.values():
         assert (method, path) in operations.values()
 

@@ -23,4 +23,10 @@ OPERATIONS = {
     "kb_test": ("POST", "/v1/kb/versions/{version_id}/test"),
     "kb_activate": ("POST", "/v1/kb/versions/{version_id}/activate"),
     "kb_rollback": ("POST", "/v1/kb/versions/{version_id}/rollback"),
+    "list_scenarios": ("GET", "/v1/scenarios"),
+    "estimate_evaluation": ("POST", "/v1/runs/{request_id}/evaluations/estimate"),
+    "create_evaluation": ("POST", "/v1/runs/{request_id}/evaluations"),
+    "estimate_comparison": ("POST", "/v1/comparisons/estimate"),
+    "create_comparison": ("POST", "/v1/comparisons"),
+    "get_comparison": ("GET", "/v1/comparisons/{comparison_id}"),
 }

@@ -20,6 +20,8 @@ REQUIRED_STRUCTURE = (
 )
 EXCLUDED_DIRECTORIES = {
     ".git",
+    ".pytest_cache",  # QA and test artefacts, never project source
+    "_tmp",  # local scratch material, never project source
     ".nox",
     ".tox",
     ".venv",
@@ -56,7 +58,7 @@ def python_files() -> list[Path]:
     files: list[Path] = []
     for path in ROOT.rglob("*.py"):
         relative_path = path.relative_to(ROOT)
-        if any(part in EXCLUDED_DIRECTORIES for part in relative_path.parts):
+        if any(part in EXCLUDED_DIRECTORIES or part.startswith(".venv") for part in relative_path.parts):
             continue
         if any(relative_path.parts[: len(prefix)] == prefix for prefix in EXCLUDED_PATH_PREFIXES):
             continue

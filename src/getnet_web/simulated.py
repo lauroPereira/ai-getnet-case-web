@@ -22,6 +22,7 @@ class SimulatedAPI:
             (FIXTURES / ("recorded.json" if recorded else "simulated.json")).read_text(encoding="utf-8")
         )
         self._model_catalog = json.loads((FIXTURES / "model_catalog.json").read_text(encoding="utf-8"))
+        self._v060 = json.loads((FIXTURES / "v060.json").read_text(encoding="utf-8"))
 
     def login(self, access_key: str) -> dict:
         raise APIError(400, "not_required", "Simulated sessions do not require an access key.")
@@ -59,14 +60,39 @@ class SimulatedAPI:
         run["router_mechanism"] = payload["router_mechanism"]
         run["execution_mode"] = "recorded" if self.recorded else "simulated"
         run["comparison_id"] = comparison_id
+        run["scenario_id"] = payload.get("scenario_id")
         return {"message": message, "run": run}
 
     def run(self, request_id: str) -> dict:
-        if request_id != "req_simulated_latest":
+        if request_id != "req_simulated_latest" and not request_id.startswith("req_fixture_"):
             raise APIError(404, "not_found", "Run not found.")
-        run = dict(self._fixtures["message"]["run"])
+        run = dict(self._fixtures["message"]["run"]) | json.loads(json.dumps(self._v060["run_details"]))
         run["execution_mode"] = self.execution_mode
         return run
+
+    def scenarios(self) -> list[dict]:
+        return list(self._v060["scenarios"])
+
+    def estimate_evaluation(self, request_id: str) -> dict:
+        return dict(self._v060["evaluation_estimate"], request_id=request_id)
+
+    def evaluate(self, request_id: str, payload: dict) -> dict:
+        if not payload.get("confirmed"):
+            raise APIError(422, "confirmation_required", "Explicit confirmation is required.")
+        return dict(self._v060["evaluation"], request_id=request_id)
+
+    def estimate_comparison(self, payload: dict) -> dict:
+        return dict(self._v060["comparison_estimate"])
+
+    def create_comparison(self, payload: dict) -> dict:
+        if not payload.get("confirmed"):
+            raise APIError(422, "confirmation_required", "Explicit confirmation is required.")
+        return {"comparison_id": "pcmp_fixture", "state": "running"}
+
+    def comparison(self, comparison_id: str) -> dict:
+        if comparison_id != "pcmp_fixture":
+            raise APIError(404, "not_found", "Comparison not found.")
+        return json.loads(json.dumps(self._v060["comparison"]))
 
     def conversation(self, conversation_id: str) -> dict:
         result = dict(self._fixtures["conversation"])
