@@ -13,7 +13,7 @@ streamlit run app.py
 
 Choose **Simulado** for a fully local fixture flow, **Gravado** to replay a saved synthetic response, or **Real (API)** and provide the backend URL plus a demo/admin access key configured on the backend. Provider keys are never entered in this interface.
 
-The full demonstration (backend with Docker, this interface, scenarios and sharing by public IP) is described in the backend [demonstration guide](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/guia-demonstracao.md).
+The backend README explains how to run the backend with Docker; its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case#streamlit-interface) section covers the `/v1` access keys this interface needs. Sharing by public IP is described in the v0.6.0 [demonstration guide](https://github.com/lauroPereira/ai-getnet-case/blob/67736304ef948db41b082aea9b1b1b20c3f912b5/docs/guia-demonstracao.md), kept in the backend history.
 
 ## Areas (v0.6.0)
 
