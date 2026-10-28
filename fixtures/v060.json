@@ -1,0 +1,76 @@
+{
+ "scenarios": [
+  {"scenario_id": "SC-RECEIVABLES", "title": "Recebimento das vendas de ontem (Customer Support)", "journey": "receivables", "language": "pt",
+   "message": "Quando vai cair o dinheiro das vendas de ontem?", "checks": ["route_ok", "status_ok", "tools_ok", "grounded_ok"], "labels": {}},
+  {"scenario_id": "SC-HANDOFF", "title": "Pedido de atendente humano (Escalation)", "journey": "handoff", "language": "pt",
+   "message": "Quero falar com um atendente humano", "checks": ["route_ok", "status_ok", "grounded_ok"], "labels": {}},
+  {"scenario_id": "SC-DOC-EFFECT", "title": "Maquininha sem conexão e alternativa de venda (efeito da documentação)", "journey": "doc_effect", "language": "pt",
+   "message": "Minha maquininha não conecta na internet. Posso vender por Link de Pagamento enquanto isso?", "checks": ["route_ok", "tools_ok", "grounded_ok"], "labels": {}}
+ ],
+ "run_details": {
+  "route": "support",
+  "duration_ms": 1234,
+  "cost_estimate_usd": 0.0,
+  "knowledge_base_version_id": "kb_fixture",
+  "prompts_used": ["router@5", "support@7"],
+  "models_by_agent": {"router": {"calls": 1, "input_tokens": 120, "output_tokens": 30, "cost_usd": 0.0, "models": ["fixture-model"]}},
+  "tools": ["get_receivables_schedule"],
+  "sources": [{"type": "tool", "title": "Receivables schedule (your account)", "url": null}],
+  "steps": [
+   {"seq": 1, "step": "input_guard", "status": "ok", "duration_ms": 1},
+   {"seq": 2, "step": "router", "status": "ok", "duration_ms": 10, "prompt": "router@5"},
+   {"seq": 3, "step": "knowledge", "status": "ok", "duration_ms": 12, "mode": "procedure",
+    "hits": [{"doc": "demo:FIXTURE", "score": 0.9, "chunk_id": "demo:FIXTURE#0-abc", "excerpt": "Trecho sintético recuperado."}]},
+   {"seq": 4, "step": "tool:get_receivables_schedule", "status": "ok", "duration_ms": 3}
+  ],
+  "checks": {"origin": "label_independent", "status": "evaluated",
+   "results": {"grounded_ok": true, "errors_ok": true, "isolation_ok": true},
+   "not_evaluated": ["route_ok", "status_ok", "language_ok", "tools_ok", "amounts_ok", "content_ok", "forbidden_ok", "sources_ok"],
+   "critical_failures": [], "passed": 3, "total": 3, "tools_called": ["get_receivables_schedule"]},
+  "evaluations": []
+ },
+ "evaluation_estimate": {
+  "method": "model", "rubric": "judge", "rubric_version": "2",
+  "evaluator": {"provider": "fixture", "model": "fixture-judge", "parameters": {"max_output_tokens": 200, "effort": "none"}},
+  "evidence_fields": ["merchant_message", "reply", "route", "sources", "status"],
+  "estimated_cost_usd": 0.0, "estimate_basis": "fixture", "existing_evaluation_id": null,
+  "repeat_required_for_new_call": false, "estimate_digest": "fixture-digest"
+ },
+ "evaluation": {
+  "evaluation_id": "eval_fixture", "method": "model", "rubric": "judge", "rubric_version": "2",
+  "evaluator": {"provider": "fixture", "model": "fixture-judge", "parameters": {"max_output_tokens": 200, "effort": "none"}},
+  "result": {"answers_question": 4, "clarity_and_tone": 4, "honesty": 5, "comment": "Avaliação sintética de demonstração."},
+  "critical_failures": [], "cost_usd": 0.0, "cost_scope": "evaluation (separate from the attendance cost)", "state": "completed",
+  "error": null, "reused": false
+ },
+ "comparison_estimate": {
+  "sample_size": 4, "new_executions": 4, "reused_executions": 0, "estimated_cost_usd": 0.0,
+  "estimate_basis": "fixture", "exploratory": false, "estimate_digest": "fixture-comparison-digest",
+  "fixed_factors": {"scenarios": ["SC-RECEIVABLES", "SC-HANDOFF"], "knowledge_base_version_id": "kb_fixture", "router_mechanism": "llm"},
+  "changes_between_profiles": [{"profiles": ["reference", "hybrid"], "changed_agents": ["router"]}],
+  "cells": []
+ },
+ "comparison": {
+  "comparison_id": "pcmp_fixture", "state": "completed", "failures": [], "cost_usd": 0.0, "cost_is_estimate": true,
+  "config": {"exploratory": false, "fixed_factors": {"scenarios": ["SC-RECEIVABLES", "SC-HANDOFF"], "knowledge_base_version_id": "kb_fixture", "router_mechanism": "llm"}},
+  "cells": [
+   {"scenario_id": "SC-RECEIVABLES", "profile_id": "reference", "profile_version": 1, "repetition": 1, "status": "completed", "origin": "simulated", "request_id": "req_fixture_1", "duration_ms": 900, "cost_usd": 0.004, "checks": {"passed": 9, "total": 11}},
+   {"scenario_id": "SC-HANDOFF", "profile_id": "reference", "profile_version": 1, "repetition": 1, "status": "completed", "origin": "simulated", "request_id": "req_fixture_2", "duration_ms": 700, "cost_usd": 0.003, "checks": {"passed": 11, "total": 11}},
+   {"scenario_id": "SC-RECEIVABLES", "profile_id": "hybrid", "profile_version": 1, "repetition": 1, "status": "completed", "origin": "simulated", "request_id": "req_fixture_3", "duration_ms": 800, "cost_usd": 0.002, "checks": {"passed": 10, "total": 11}},
+   {"scenario_id": "SC-HANDOFF", "profile_id": "hybrid", "profile_version": 1, "repetition": 1, "status": "failed", "origin": "simulated", "request_id": "req_fixture_4", "error": "router_unavailable"}
+  ],
+  "aggregates": {
+   "quality_basis": "share of deterministic checks passed under the same scenario labels",
+   "profiles": [
+    {"profile_id": "reference", "profile_version": 1, "planned": 2, "sample_size": 2, "failed": 0, "cost_mean_usd": 0.0035, "cost_total_usd": 0.007, "duration_mean_ms": 800, "deterministic_quality": 0.9091, "critical_failures": 0, "model_quality": null, "model_quality_status": "not_evaluated"},
+    {"profile_id": "hybrid", "profile_version": 1, "planned": 2, "sample_size": 1, "failed": 1, "cost_mean_usd": 0.002, "cost_total_usd": 0.002, "duration_mean_ms": 800, "deterministic_quality": 0.9091, "critical_failures": 0, "model_quality": null, "model_quality_status": "not_evaluated"}
+   ],
+   "cost_by_agent_model": [
+    {"profile_id": "reference", "profile_version": 1, "agent": "router", "model": "fixture-model", "cost_usd": 0.002, "request_ids": ["req_fixture_1", "req_fixture_2"]},
+    {"profile_id": "reference", "profile_version": 1, "agent": "customer_support", "model": "fixture-model", "cost_usd": 0.005, "request_ids": ["req_fixture_1"]},
+    {"profile_id": "hybrid", "profile_version": 1, "agent": "router", "model": "fixture-cheap-model", "cost_usd": 0.002, "request_ids": ["req_fixture_3"]}
+   ],
+   "exploratory": false
+  }
+ }
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Protocol
 
@@ -11,6 +12,13 @@ import httpx
 from getnet_web.generated_api import OPERATIONS
 
 log = logging.getLogger("getnet_web.http")
+
+# Reads and administrative calls stay short. Operations that wait for paid work in the backend (an attendance,
+# the Router comparison, an evaluation, a candidate build or test) get the backend request limit
+# (MAX_REQUEST_SECONDS, 90 s by default) plus a margin, so a finished answer is not reported as a timeout.
+DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_TIMEOUT_SECONDS", "20"))
+LONG_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_MESSAGE_TIMEOUT_SECONDS", "105"))
+LONG_OPERATIONS = frozenset({"send_v1_message", "compare_routers", "create_evaluation", "kb_build", "kb_test"})
 
 
 class APIError(RuntimeError):
@@ -44,6 +52,12 @@ class API(Protocol):
     def kb_test(self, version_id: str, payload: dict) -> dict: ...
     def kb_activate(self, version_id: str, payload: dict) -> dict: ...
     def kb_rollback(self, version_id: str, payload: dict) -> dict: ...
+    def scenarios(self) -> list[dict]: ...
+    def estimate_evaluation(self, request_id: str) -> dict: ...
+    def evaluate(self, request_id: str, payload: dict) -> dict: ...
+    def estimate_comparison(self, payload: dict) -> dict: ...
+    def create_comparison(self, payload: dict) -> dict: ...
+    def comparison(self, comparison_id: str) -> dict: ...
 
 
 class APIClient:
@@ -52,7 +66,7 @@ class APIClient:
     def __init__(
         self, base_url: str, *, token: str | None = None, transport: httpx.BaseTransport | None = None
     ) -> None:
-        self._http = httpx.Client(base_url=base_url.rstrip("/"), transport=transport, timeout=20.0)
+        self._http = httpx.Client(base_url=base_url.rstrip("/"), transport=transport, timeout=DEFAULT_TIMEOUT_SECONDS)
         self._token = token
 
     def close(self) -> None:
@@ -69,7 +83,8 @@ class APIClient:
             headers["Authorization"] = f"Bearer {self._token}"
         started = time.perf_counter()
         try:
-            response = self._http.request(method, route, json=body, headers=headers)
+            timeout = LONG_TIMEOUT_SECONDS if operation in LONG_OPERATIONS else DEFAULT_TIMEOUT_SECONDS
+            response = self._http.request(method, route, json=body, headers=headers, timeout=timeout)
         except httpx.TransportError as exc:
             log.warning(
                 "Backend HTTP transport failed",
@@ -83,8 +98,11 @@ class APIClient:
             )
             raise
         if response.status_code >= 400:
-            data = response.json()
-            error = data.get("error", {})
+            try:
+                data = response.json()
+            except ValueError:  # a proxy or gateway answered without the structured error body
+                data = {}
+            error = data.get("error", {}) if isinstance(data, dict) else {}
             raise APIError(
                 response.status_code, error.get("code", "http_error"), error.get("message", "Backend request failed.")
             )
@@ -157,6 +175,24 @@ class APIClient:
 
     def kb_rollback(self, version_id: str, payload: dict) -> dict:
         return self._request("kb_rollback", path_params={"version_id": version_id}, body=payload)
+
+    def scenarios(self) -> list[dict]:
+        return self._request("list_scenarios")["scenarios"]
+
+    def estimate_evaluation(self, request_id: str) -> dict:
+        return self._request("estimate_evaluation", path_params={"request_id": request_id})
+
+    def evaluate(self, request_id: str, payload: dict) -> dict:
+        return self._request("create_evaluation", path_params={"request_id": request_id}, body=payload)
+
+    def estimate_comparison(self, payload: dict) -> dict:
+        return self._request("estimate_comparison", body=payload)
+
+    def create_comparison(self, payload: dict) -> dict:
+        return self._request("create_comparison", body=payload)
+
+    def comparison(self, comparison_id: str) -> dict:
+        return self._request("get_comparison", path_params={"comparison_id": comparison_id})
 
 
 def get_session_client(state: Any, base_url: str, token: str, *, factory=APIClient) -> APIClient:

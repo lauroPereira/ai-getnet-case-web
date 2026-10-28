@@ -3,7 +3,7 @@
   "info": {
     "title": "Getnet Merchant Assistant",
     "description": "Multi-agent support system: Router, Knowledge, Customer Support, Escalation and Personality.",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "paths": {
     "/v1/sessions": {
@@ -809,6 +809,30 @@
         ]
       }
     },
+    "/v1/scenarios": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Scenarios List",
+        "operationId": "scenarios_list_v1_scenarios_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
     "/v1/messages": {
       "post": {
         "tags": [
@@ -832,6 +856,16 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
               }
             }
           },
@@ -873,6 +907,259 @@
             "schema": {
               "type": "string",
               "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{request_id}/evaluations/estimate": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Evaluation Estimate",
+        "operationId": "evaluation_estimate_v1_runs__request_id__evaluations_estimate_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{request_id}/evaluations": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Evaluation Create",
+        "operationId": "evaluation_create_v1_runs__request_id__evaluations_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comparisons/estimate": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Comparison Estimate",
+        "operationId": "comparison_estimate_v1_comparisons_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComparisonEstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/comparisons": {
+      "post": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Comparison Create",
+        "operationId": "comparison_create_v1_comparisons_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComparisonCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/comparisons/{comparison_id}": {
+      "get": {
+        "tags": [
+          "v1"
+        ],
+        "summary": "Comparison Read",
+        "operationId": "comparison_read_v1_comparisons__comparison_id__get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "comparison_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Comparison Id"
             }
           }
         ],
@@ -1176,6 +1463,141 @@
         ],
         "title": "CompareRequest"
       },
+      "ComparisonCreateRequest": {
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonProfileRef"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 2,
+            "title": "Profiles"
+          },
+          "scenario_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Scenario Ids"
+          },
+          "repetitions": {
+            "type": "integer",
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Repetitions",
+            "default": 1
+          },
+          "router_mechanism": {
+            "type": "string",
+            "pattern": "^(llm|jev)$",
+            "title": "Router Mechanism",
+            "default": "llm"
+          },
+          "reuse_recorded": {
+            "type": "boolean",
+            "title": "Reuse Recorded",
+            "default": true
+          },
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          },
+          "max_cost_usd": {
+            "type": "number",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Max Cost Usd"
+          },
+          "expected_estimate_digest": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Expected Estimate Digest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profiles",
+          "scenario_ids",
+          "confirmed",
+          "max_cost_usd",
+          "expected_estimate_digest"
+        ],
+        "title": "ComparisonCreateRequest"
+      },
+      "ComparisonEstimateRequest": {
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonProfileRef"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 2,
+            "title": "Profiles"
+          },
+          "scenario_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Scenario Ids"
+          },
+          "repetitions": {
+            "type": "integer",
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Repetitions",
+            "default": 1
+          },
+          "router_mechanism": {
+            "type": "string",
+            "pattern": "^(llm|jev)$",
+            "title": "Router Mechanism",
+            "default": "llm"
+          },
+          "reuse_recorded": {
+            "type": "boolean",
+            "title": "Reuse Recorded",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profiles",
+          "scenario_ids"
+        ],
+        "title": "ComparisonEstimateRequest"
+      },
+      "ComparisonProfileRef": {
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Profile Id"
+          },
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Profile Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profile_id",
+          "profile_version"
+        ],
+        "title": "ComparisonProfileRef"
+      },
       "ErrorBody": {
         "properties": {
           "error": {
@@ -1210,6 +1632,39 @@
           "request_id"
         ],
         "title": "ErrorDetail"
+      },
+      "EvaluationRequest": {
+        "properties": {
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          },
+          "max_cost_usd": {
+            "type": "number",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Max Cost Usd"
+          },
+          "expected_estimate_digest": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Expected Estimate Digest"
+          },
+          "repeat": {
+            "type": "boolean",
+            "title": "Repeat",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirmed",
+          "max_cost_usd",
+          "expected_estimate_digest"
+        ],
+        "title": "EvaluationRequest"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1865,6 +2320,19 @@
               }
             ],
             "title": "Comparison Id"
+          },
+          "scenario_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Id"
           }
         },
         "additionalProperties": false,

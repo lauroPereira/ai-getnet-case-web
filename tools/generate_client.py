@@ -29,6 +29,12 @@ ALIASES = {
     "kb_test": "kb_test_v1_kb_versions__version_id__test_post",
     "kb_activate": "kb_activate_v1_kb_versions__version_id__activate_post",
     "kb_rollback": "kb_rollback_v1_kb_versions__version_id__rollback_post",
+    "list_scenarios": "scenarios_list_v1_scenarios_get",
+    "estimate_evaluation": "evaluation_estimate_v1_runs__request_id__evaluations_estimate_post",
+    "create_evaluation": "evaluation_create_v1_runs__request_id__evaluations_post",
+    "estimate_comparison": "comparison_estimate_v1_comparisons_estimate_post",
+    "create_comparison": "comparison_create_v1_comparisons_post",
+    "get_comparison": "comparison_read_v1_comparisons__comparison_id__get",
 }
 
 schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
