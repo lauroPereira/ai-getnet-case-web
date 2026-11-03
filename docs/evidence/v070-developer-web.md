@@ -112,3 +112,58 @@
 ### Pendente de propósito
 
 Sincronização do OpenAPI (`/v1/auth/*`, `/v1/handoffs`, `via` em `/v1/messages`), quando o Supervisor indicar o commit do backend.
+
+## Tarefa 67, rodada 3
+
+- Papel e responsável: Developer do Time B; sincronização do OpenAPI pedida pelo Supervisor.
+- Escopo:
+  - `openapi-v1.json`, `tools/generate_client.py` (aliases), `src/getnet_web/generated_api.py` (regenerado), `src/getnet_web/api.py`, `app.py`.
+  - `tests/test_interface.py`, `tests/test_v070_interface.py`, `README.md`, a tarefa 67 e esta passagem.
+  - Nada lido ou executado no backend.
+- Base e versão final: base `7e317f0`; versão final é o commit desta rodada.
+- Independência: não-independente (relato do autor).
+
+### Sincronização
+
+- **Fonte:** o OpenAPI exportado pelo Supervisor do backend no commit `7079920`, conferido por sha256 `d5aad2944c7638439d16456f5e6c57ebd383576e9d3aae6d52b36cf73ebbfd8e`.
+  - 36 caminhos, entre eles `/v1/auth/token`, `/v1/auth/revoke`, `/v1/handoffs*`, `/v1/integrations/ticketing/events`, `/v1/messages` e `/v1/conversations/{id}`.
+  - Copiado sem alteração para `openapi-v1.json`, que tem o mesmo sha256.
+- **Processo do projeto:**
+  - Em `tools/generate_client.py`, os aliases `create_session` e `revoke_session` (rotas que saíram, D3) deram lugar a `auth_token` e `auth_revoke`.
+  - `python tools/generate_client.py` gerou 28 operações em `generated_api.py`.
+  - Não acrescentei `/v1/handoffs`: a tela de ticketing fala com o serviço de ticketing, não com essas rotas.
+- **`api.py`:** sem as constantes provisórias.
+  - `login` usa `OPERATIONS["auth_token"]`, com formulário RFC 6749, como declara o `requestBody` `application/x-www-form-urlencoded`.
+  - `logout` usa `OPERATIONS["auth_revoke"]`, com Bearer, como declara a `security` `SessionBearer`.
+
+### `via`, `operator_action` e `protocol`
+
+- **O que o OpenAPI diz:**
+  - `via` aparece declarado no `MessageResponse` (`agent`|`operator`, "operator: the reply was written or approved by a human support agent"), junto da rota `human_reply`.
+  - A resposta 200 de `/v1/messages` e a de `/v1/conversations/{id}` não têm schema no arquivo (`{}`), e `operator_action` não aparece no OpenAPI.
+- **O que a web faz:**
+  - Lê `via` no topo da resposta de `/v1/messages` (pedido do Supervisor) e também no objeto `message`, além de aceitar `route=human_reply`.
+  - Nos turnos de operador, guarda `operator_action` (no turno ou no topo da resposta) e `protocol` (no turno ou em `handoff.protocol`).
+  - A legenda mostra, por exemplo, "Atendente humano · rota human_reply · ação resposta do atendente · protocolo HO-20261103-ABC123". Isso vale tanto para a resposta do envio quanto para o turno recuperado pelo GET da conversa.
+- **Testes novos:**
+  - `test_openapi_snapshot_declares_the_attendant_turn_and_the_form_token_endpoint`.
+  - `test_via_at_the_top_of_the_v1_response_marks_the_attendant_turn`.
+  - `test_conversation_operator_turn_shows_action_and_protocol`.
+- **Testes antigos ajustados:**
+  - `test_openapi_documents_session_bearer_for_protected_operations` agora confere `bearerFormat: JWT`; `/v1/auth/token` sem `security`; `/v1/auth/revoke` com `SessionBearer`; ausência de `/v1/sessions`; e as operações geradas `auth_token`/`auth_revoke`.
+  - A contagem de 28 operações continua valendo.
+
+### Evidência
+
+- Script estrito (`--basetemp .pytest_cache/v070-web-strict`) → código 0, **67 testes aprovados** (64 + 3), ruff limpo.
+- Na primeira execução, 1 teste antigo falhou porque comparava o esquema de segurança exatamente, e o novo declara `bearerFormat` e descrição. O teste foi ajustado.
+- Nenhuma chamada paga, nenhum serviço real; sem push.
+
+### Limitações
+
+- O contrato pode ter ajuste fino depois das revisões de 63 a 66; isso pede nova cópia do OpenAPI e nova geração.
+- Sem schema de resposta para `/v1/messages` e `/v1/conversations/{id}`, o lugar de `operator_action` vem do pedido do Supervisor, não do OpenAPI. A tela aceita os dois lugares.
+
+### Próxima ação
+
+Revisão da rodada 3.

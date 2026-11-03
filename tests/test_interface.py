@@ -63,9 +63,16 @@ def test_http_client_reads_the_backend_parameter_catalog():
 
 def test_openapi_documents_session_bearer_for_protected_operations():
     schema = json.loads((ROOT / "openapi-v1.json").read_text(encoding="utf-8"))
-    assert schema["components"]["securitySchemes"]["SessionBearer"] == {"type": "http", "scheme": "bearer"}
+    bearer = schema["components"]["securitySchemes"]["SessionBearer"]
+    assert (bearer["type"], bearer["scheme"], bearer.get("bearerFormat")) == ("http", "bearer", "JWT")
     assert schema["paths"]["/v1/profiles"]["get"]["security"] == [{"SessionBearer": []}]
-    assert "security" not in schema["paths"]["/v1/sessions"]["post"]
+    # v0.7.0 (backend 7079920): the token endpoint is open, revocation needs the bearer, /v1/sessions is gone (D3)
+    assert "security" not in schema["paths"]["/v1/auth/token"]["post"]
+    assert schema["paths"]["/v1/auth/revoke"]["post"]["security"] == [{"SessionBearer": []}]
+    assert "/v1/sessions" not in schema["paths"] and "/v1/sessions/current" not in schema["paths"]
+    assert OPERATIONS["auth_token"] == ("POST", "/v1/auth/token")
+    assert OPERATIONS["auth_revoke"] == ("POST", "/v1/auth/revoke")
+    assert "create_session" not in OPERATIONS and "revoke_session" not in OPERATIONS
 
 
 def test_openapi_documents_router_budget_error_body():

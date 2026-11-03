@@ -62,10 +62,10 @@ Developer, rodada 1 (2026-11-03), branch `codex/v0.7.0-identidade-hitl` sobre `3
   - Nenhum POST em navegação, troca de fila e rerun.
   - Senha fora do `session_state` e da tela.
 - Script estrito: `PYTEST_ADDOPTS="-p no:cacheprovider --basetemp .pytest_cache/v070-web-strict" .venv-v040/Scripts/python.exe tools/scripts/lint_and_tests.py --strict` terminou com código 0 e 59 testes aprovados (42 + 17); ruff limpo.
-- Não feito: sincronização do OpenAPI (`openapi-v1.json` e `generated_api.py`), porque falta o JSON revisado do backend.
+- Rodada 3: OpenAPI sincronizado com o backend `7079920` (`openapi-v1.json` com sha256 `d5aad294…bfd8e`, 36 caminhos); `generated_api.py` regenerado por `tools/generate_client.py` (28 operações, com `auth_token` e `auth_revoke`, sem `/v1/sessions`); `api.py` sem constantes provisórias; `via` lido no topo da resposta e no objeto da mensagem; `operator_action` e `protocol` aparecem nos turnos de operador. Script estrito: código 0, 67 testes aprovados.
 
 ## Status
 
 ```text
-Implementada pelo Developer (rodada 1); aguarda revisão independente. A sincronização do OpenAPI fica como passo separado, quando o Supervisor indicar o commit do backend.
+Rodadas 1 a 3 implementadas pelo Developer; a rodada 3 sincronizou o OpenAPI com o backend 7079920. Aguarda revisão.
 ```

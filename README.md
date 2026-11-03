@@ -79,7 +79,7 @@ To share the interface, run `streamlit run app.py --server.address 0.0.0.0 --ser
 
 
 
-`openapi-v1.json` is the backend contract snapshot. Until the reviewed v0.7.0 OpenAPI is synchronized, the identity routes (`/v1/auth/token`, `/v1/auth/revoke`) follow the backend spec contract and live as constants in `src/getnet_web/api.py`; the ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
+`openapi-v1.json` is the backend contract snapshot (v0.7.0: backend commit `7079920`, with `/v1/auth/token` and `/v1/auth/revoke`; `/v1/sessions` is gone). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
 
 
 

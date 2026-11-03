@@ -23,10 +23,7 @@ DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_TIMEOUT_SECONDS", "20"))
 LONG_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_MESSAGE_TIMEOUT_SECONDS", "105"))
 LONG_OPERATIONS = frozenset({"send_v1_message", "compare_routers", "create_evaluation", "kb_build", "kb_test"})
 
-# Identity routes of the v0.7.0 contract (backend spec "identidade-hitl-v070", "Contrato entre os times"). They are not
-# in openapi-v1.json yet: when the reviewed backend OpenAPI is synchronized, these move to generated_api.py.
-AUTH_TOKEN_ROUTE = "/v1/auth/token"
-AUTH_REVOKE_ROUTE = "/v1/auth/revoke"
+# Public client of the password grant (backend spec v0.7.0, "Contrato entre os times", Identidade).
 WEB_CLIENT_ID = os.environ.get("AUTH_CLIENT_ID", "merchant-assistant-web")
 SESSION_ENDED_CODES = frozenset({"token_required", "invalid_token"})
 
@@ -138,7 +135,8 @@ class APIClient:
         """Password grant (RFC 6749) for the public web client. Errors follow RFC 6749 section 5.2."""
         form = {"grant_type": "password", "username": username, "password": password, "client_id": WEB_CLIENT_ID}
         try:
-            response = self._http.post(AUTH_TOKEN_ROUTE, data=form)
+            method, route = OPERATIONS["auth_token"]  # form encoded (RFC 6749), not JSON
+            response = self._http.request(method, route, data=form)
         except httpx.TransportError as exc:
             log.warning("Backend login transport failed", extra={"event": {"error_class": type(exc).__name__}})
             raise
@@ -159,7 +157,8 @@ class APIClient:
 
     def logout(self) -> None:
         """Revokes the token's jti on the backend (POST /v1/auth/revoke)."""
-        response = self._http.post(AUTH_REVOKE_ROUTE, headers={"Authorization": f"Bearer {self._token}"})
+        method, route = OPERATIONS["auth_revoke"]
+        response = self._http.request(method, route, headers={"Authorization": f"Bearer {self._token}"})
         self._token = None
         if response.status_code >= 400 and response.status_code != 401:
             raise APIError(response.status_code, "revoke_failed", "The backend did not confirm the logout.")

@@ -64,6 +64,7 @@ REVOKE_UNCONFIRMED = (
     "expirar. Se a sessão foi usada em um computador compartilhado, avise o administrador."
 )
 STATUS_LABELS = {"new": "Recepção", "open": "Atendimento", "pending": "Envio", "solved": "Finalização"}
+ATTENDANT_ACTIONS = {"approve": "rascunho aprovado", "reply": "resposta do atendente", "reject": "refeita após rejeição"}
 ACTION_LABELS = {"approve": "Aprovar o rascunho", "reply": "Responder", "reject": "Rejeitar com instrução"}
 
 
@@ -177,7 +178,7 @@ def send_chat_message(api, payload, message_text):
     st.session_state.chat_history.extend(
         [
             {"role": "user", "text": message_text},
-            assistant_turn(reply["answer"], reply),
+            assistant_turn(reply["answer"], reply, result),
         ]
     )
     request_id = reply.get("request_id")
@@ -207,12 +208,31 @@ def send_chat_message(api, payload, message_text):
     return True
 
 
-def assistant_turn(text, reply):
-    """A turn written by a human attendant (spec v0.7.0, D8) carries via=operator (route human_reply)."""
+def assistant_turn(text, reply, envelope=None):
+    """A turn written or approved by a human attendant (spec v0.7.0, D8): via=operator, route human_reply.
+
+    `via` is read at the top of the /v1/messages response and in its message object (OpenAPI 7079920 declares it in
+    MessageResponse); conversation turns also carry operator_action and protocol, kept for the label."""
     turn = {"role": "assistant", "text": text}
-    if reply.get("via") == "operator" or reply.get("route") == "human_reply":
+    via = (envelope or {}).get("via") or reply.get("via")
+    if via == "operator" or reply.get("route") == "human_reply":
         turn["via"] = "operator"
+        action = reply.get("operator_action") or (envelope or {}).get("operator_action")
+        protocol = reply.get("protocol") or (reply.get("handoff") or {}).get("protocol")
+        if action:
+            turn["operator_action"] = action
+        if protocol:
+            turn["protocol"] = protocol
     return turn
+
+
+def attendant_label(turn):
+    parts = ["Atendente humano", "rota human_reply"]
+    if turn.get("operator_action"):
+        parts.append(f"ação {ATTENDANT_ACTIONS.get(turn['operator_action'], turn['operator_action'])}")
+    if turn.get("protocol"):
+        parts.append(f"protocolo {turn['protocol']}")
+    return " · ".join(parts)
 
 
 def find_pending_reply(conversation, pending):
@@ -918,7 +938,7 @@ with attendance_tab:
         attendant = turn.get("via") == "operator"
         with st.chat_message(turn["role"], avatar="🧑‍💼" if attendant else None):
             if attendant:
-                st.caption("Atendente humano · rota human_reply")
+                st.caption(attendant_label(turn))
             st.markdown(literal(turn["text"]))
     case_view = st.session_state.case_view
     if case_view:

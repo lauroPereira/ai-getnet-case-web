@@ -1,8 +1,8 @@
 """Generated from openapi-v1.json by tools/generate_client.py. Do not edit."""
 
 OPERATIONS = {
-    "create_session": ("POST", "/v1/sessions"),
-    "revoke_session": ("DELETE", "/v1/sessions/current"),
+    "auth_token": ("POST", "/v1/auth/token"),
+    "auth_revoke": ("POST", "/v1/auth/revoke"),
     "model_catalog": ("GET", "/v1/catalog/models"),
     "list_profiles": ("GET", "/v1/profiles"),
     "create_profile": ("POST", "/v1/profiles"),

@@ -575,3 +575,65 @@ def test_ticketing_client_rejects_bodies_outside_the_contract():
             call()
         assert (error.value.status_code, error.value.code) == (502, "invalid_response")
     client.close()
+
+
+# --- round 3 (OpenAPI 7079920) --------------------------------------------------------------------------------------
+
+
+def test_openapi_snapshot_declares_the_attendant_turn_and_the_form_token_endpoint():
+    schema = json.loads((ROOT / "openapi-v1.json").read_text(encoding="utf-8"))
+    via = schema["components"]["schemas"]["MessageResponse"]["properties"]["via"]
+    assert via["enum"] == ["agent", "operator"]
+    token = schema["paths"]["/v1/auth/token"]["post"]["requestBody"]["content"]
+    assert "application/x-www-form-urlencoded" in token
+
+
+def test_via_at_the_top_of_the_v1_response_marks_the_attendant_turn(wire):
+    reply = {"answer": "Aqui é a Ana: o crédito cai amanhã.", "route": "support", "status": "answered",
+             "request_id": None}
+
+    class TopLevelVia(FakeAssistant):
+        def send_message(self, payload):
+            self.posts.append("send_message")
+            message = self.reply | {"conversation_id": payload["conversation_id"]}
+            return {"message": message, "run": None, "via": "operator", "operator_action": "approve"}
+
+    wire(TopLevelVia("merchant", "merchant:cliente1988", reply=reply), FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    app.text_area(key="message_input").set_value("Alguma novidade?")
+    app.button(key="send_message").click().run()
+    assert not app.exception
+    assert any("Atendente humano" in str(item.value) and "rascunho aprovado" in str(item.value)
+               for item in app.caption)
+
+
+def test_conversation_operator_turn_shows_action_and_protocol(wire):
+    question = "Alguma novidade sobre o meu caso?"
+
+    class Recovering(FakeAssistant):
+        def send_message(self, payload):
+            raise httpx.ReadTimeout("synthetic timeout")
+
+        def conversation(self, conversation_id):
+            return {
+                "conversation_id": conversation_id,
+                "state": "awaiting_customer",
+                "messages": [
+                    {"role": "merchant", "text": question},
+                    {"role": "assistant", "text": "Oi, aqui é a Ana: o crédito cai amanhã.", "via": "operator",
+                     "operator_action": "reply", "protocol": "HO-20261103-ABC123", "route": "human_reply",
+                     "status": "answered"},
+                ],
+            }
+
+    wire(Recovering("merchant", "merchant:cliente1988"), FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    app.text_area(key="message_input").set_value(question)
+    app.button(key="send_message").click().run()
+    app.button(key="recover_pending_conversation").click().run()
+    assert not app.exception
+    labels = [str(item.value) for item in app.caption]
+    assert any(
+        "Atendente humano" in label and "resposta do atendente" in label and "HO-20261103-ABC123" in label
+        for label in labels
+    )
