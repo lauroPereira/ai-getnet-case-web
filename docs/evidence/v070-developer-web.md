@@ -167,3 +167,68 @@ Sincronização do OpenAPI (`/v1/auth/*`, `/v1/handoffs`, `via` em `/v1/messages
 ### Próxima ação
 
 Revisão da rodada 3.
+
+## Tarefa 67, rodada 4
+
+- Papel e responsável: Developer do Time B, correções do [parecer da rodada 3](v070-reviewer-web.md) (commit `40b3797`; o candidato revisado foi `733cc37`).
+- Escopo: `app.py`, `tests/test_v070_interface.py`, `README.md`, a tarefa 67 e esta passagem. Backend não tocado e nada executado nele; li só a tarefa e a spec do repositório do backend e usei as formas capturadas pelo Reviewer.
+- Base e versão final: base `40b3797`; versão final é o commit desta rodada. Independência: não-independente (relato do autor). Identidade do Git conferida antes do commit (`lauroPereira <lauro.s.pereira@gmail.com>`).
+
+### P2-1: troca de usuário não herda a conversa
+
+- **Mudança:** novas funções em `app.py`.
+  - `conversation_defaults()` é a fonte única dos valores iniciais de `chat_history`, `conversation_id`, `backend_message_count`, `pending_message`, `recovered_without_request_id`, `latest_run`, `runs`, `case_view`, `comparison`, `evaluation_estimate`, `comparison_estimate`, `profile_comparison_id`, `profile_comparison` e `pending_run_selection`. O laço de inicialização passou a usá-la.
+  - `forget_conversation()` repõe esses valores e apaga o que o usuário digitou, escolheu ou estimou (`USER_SCRATCH_KEYS`: `message_input`, `compare_input`, `results_run_choice`, os contextos de confirmação de avaliação e comparação, `kb_estimate`, `admin_notice` e os contextos de confirmação da base de conhecimento).
+  - `end_session(notice, forget=False)`: **Encerrar sessão** passa `forget=True`, com ou sem revogação confirmada.
+- **Quem é o dono da conversa:** `conversation_owner` guarda o `sub` do token que a criou. Não é apagado na expiração nem no `401`, para que o mesmo usuário volte a ela.
+  - No login, se o `sub` for ausente ou diferente de `conversation_owner`, `forget_conversation()` roda antes de gravar o token.
+  - Mesmo `sub` depois de expirar mantém a conversa.
+  - Token sem `sub` nunca reaproveita, porque não dá para provar que é o mesmo usuário.
+- **Decisão além do texto do parecer:** o primeiro login da sessão do navegador (`conversation_owner` vazio) também limpa. Efeito visível: uma conversa começada no modo Simulado ou Gravado some ao entrar no modo Real. Escolhi a regra conservadora (só reaproveita quando o `sub` é conhecido e igual); trocar para "limpa só se havia dono anterior" é uma linha.
+- **Não é limpo:** `used_comparisons` (conjunto do modo simulado), as seleções da tela (perfil, cenário, filtros) e o estado do ticketing, que o `end_session` já zerava.
+
+### P2-2: recuperação da resposta com a ordem real da conversa
+
+- **Mudança em `find_pending_reply`:** devolve `(turno, contagem consumida)` ou `None`.
+  1. Primeiro `assistant` depois da pergunta pendente, como antes.
+  2. Sem ele, o último turno de operador (`via=operator` ou rota `human_reply`) entre o baseline e a pergunta, que é a ordem que a entrega D8 grava: `[merchant Q1, assistant(agent), assistant(operator), merchant pendente]`.
+  3. Uma mensagem de lojista seguinte não impede mais o item 2; só encerra a busca do item 1.
+- **Sem turno repetido:** o item 2 olha só depois do baseline. A contagem `backend_message_count` passa a ser a posição consumida (turno da resposta, ou a pergunta no item 2, mais um) em vez de `+= 2`. Nos formatos `[pergunta, resposta]` e `[operador, pergunta]` dá o mesmo `+2`; difere só quando havia mensagens não vistas entre o baseline e a pergunta, e aí evita exibi-las depois.
+- **Limite do dado:** a conversa não expõe se o turno do operador já foi entregue. Com `[operador, pergunta]` sem outra pista, a tela o trata como a resposta, como o parecer pediu. O baseline é o que o separa de um turno já mostrado.
+- **Teste corrigido:** `test_conversation_operator_turn_shows_action_and_protocol` agora usa a ordem capturada, com o envio de Q2 perdido por timeout, e confere a legenda "Atendente humano · rota human_reply · ação resposta do atendente · protocolo HO-20261026-0F1286".
+
+### P3
+
+- **P3-1:** o ramo de `via`/`operator_action` no topo do envelope saiu de `assistant_turn(text, reply)`, que não recebe mais o envelope, e o teste `TopLevelVia` foi removido. Nenhum caminho real dependia dele: o envelope real é `{"message": {..., "via": ...}, "run": ...}`, e `operator_action` e `protocol` só vêm nos turnos do GET da conversa. Um auxiliar `is_operator_turn` serve ao turno e à recuperação. O formato real do envio fica coberto por `test_attendance_marks_the_attendant_turn` e por `test_recovery_does_not_show_a_delivered_operator_turn_twice`, que usa a mensagem de operador capturada.
+- **P3-2:** `README.md:31` agora fala do backend em que a interface entra com usuário e senha (v0.7.0), sem as chaves de acesso.
+- **P3-3:** o sha256 do blob de `openapi-v1.json` em `733cc37` é `8cace9073e7cfae27f79722a0237bdd4c7648f01643bb30ad8294ed092931fc9`. O `d5aad2944c76…` citado na rodada 3 é o do arquivo de trabalho com CRLF (`core.autocrlf=true`); a rodada 3 fica como histórico e vale este. A tarefa 67 foi corrigida.
+
+### Testes novos e alterados
+
+Os testes novos estão em `tests/test_v070_interface.py`, com um assistente falso (`ScriptedChat`) que grava as mensagens na ordem do backend real, formas capturadas pelo Reviewer e nenhuma rede.
+
+- `test_conversation_operator_turn_shows_action_and_protocol` (corrigido): ordem real, resposta perdida por timeout, recuperação mostra o turno do operador uma vez, contagem 4, rerun sem GET nem POST.
+- `test_recovery_does_not_show_a_delivered_operator_turn_twice`: o turno entregue pelo envio (D8) não volta numa recuperação posterior; a pergunta sem resposta fica pendente; depois da resposta automática a contagem vai a 6.
+- `test_recovery_prefers_the_assistant_answer_that_follows_the_question` e `test_recovery_without_an_operator_turn_or_an_answer_keeps_the_question_pending`.
+- `test_logout_then_another_principal_does_not_inherit_the_conversation`: A conversa (com execução, comparação e pergunta pendente), sai, B entra e não vê nada de A; a mensagem de B não leva o `conversation_id` de A.
+- `test_expiry_then_another_principal_does_not_inherit_the_conversation` (2 casos: outro `sub`; token sem `sub`) e `test_expiry_then_the_same_principal_keeps_the_conversation`.
+- Removido: `test_via_at_the_top_of_the_v1_response_marks_the_attendant_turn`.
+
+### Evidência
+
+- **Comando:** `PYTHONPATH=src PYTEST_ADDOPTS="-p no:cacheprovider --basetemp .pytest_cache/t67-r4-dev-20261103-204018" .venv-v040/Scripts/python.exe tools/scripts/lint_and_tests.py --strict` → código 0, **73 testes aprovados** em 68,23 s (67 − 1 removido + 7 novos), Ruff "All checks passed!", estrutura e skills válidas. Uma execução anterior da mesma árvore de código (`...-20261103-203756`) também terminou com 73 aprovados, antes de eu só mexer na documentação.
+- **Mutação em `app.py`** (restaurado byte a byte do backup depois de cada rodada), subconjunto de testes do arquivo `test_v070_interface.py`: 10 mutantes, 10 mortos.
+  - Logout sem `forget`; login que nunca esquece; login que aceita `sub` ausente; expiração que esquece; `USER_SCRATCH_KEYS` sem efeito; `comparison` fora dos valores iniciais.
+  - Recuperação sem o ramo do operador; ramo do operador sem respeitar o baseline; contagem `+= 2` no lugar da consumida.
+  - `runs` fora dos valores iniciais morreu por exceção (chave ausente), não por asserção.
+- Nenhuma chamada paga, nenhum serviço real, sem push.
+
+### Limitações
+
+- Navegador real, backend real e ticketing real não foram exercitados (ficam para o QA). Os testes usam `AppTest` e clientes falsos com as formas capturadas pelo Reviewer.
+- No `AppTest`, as chaves dos campos de texto sobrevivem a logout e login. Por isso `message_input` e `compare_input` são apagados à mão; num navegador o Streamlit provavelmente já descarta widgets não desenhados, mas não verifiquei.
+- A recuperação não distingue um turno de operador entregue antes por outro caminho (por exemplo outro cliente lendo a conversa) de um entregue com a pergunta pendente, porque o GET da conversa não expõe esse estado.
+
+### Próxima ação
+
+Nova revisão independente da rodada 4; QA depois, com navegador, backend e ticketing reais.

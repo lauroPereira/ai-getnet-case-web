@@ -62,10 +62,15 @@ Developer, rodada 1 (2026-11-03), branch `codex/v0.7.0-identidade-hitl` sobre `3
   - Nenhum POST em navegação, troca de fila e rerun.
   - Senha fora do `session_state` e da tela.
 - Script estrito: `PYTEST_ADDOPTS="-p no:cacheprovider --basetemp .pytest_cache/v070-web-strict" .venv-v040/Scripts/python.exe tools/scripts/lint_and_tests.py --strict` terminou com código 0 e 59 testes aprovados (42 + 17); ruff limpo.
-- Rodada 3: OpenAPI sincronizado com o backend `7079920` (`openapi-v1.json` com sha256 `d5aad294…bfd8e`, 36 caminhos); `generated_api.py` regenerado por `tools/generate_client.py` (28 operações, com `auth_token` e `auth_revoke`, sem `/v1/sessions`); `api.py` sem constantes provisórias; `via` lido no topo da resposta e no objeto da mensagem; `operator_action` e `protocol` aparecem nos turnos de operador. Script estrito: código 0, 67 testes aprovados.
+- Rodada 3: OpenAPI sincronizado com o backend `7079920` (`openapi-v1.json` com sha256 do blob `8cace907…931fc9`, 36 caminhos; `d5aad294…` é o do arquivo de trabalho com CRLF); `generated_api.py` regenerado por `tools/generate_client.py` (28 operações, com `auth_token` e `auth_revoke`, sem `/v1/sessions`); `api.py` sem constantes provisórias; `via` lido no objeto `message` da resposta (o ramo do topo do envelope saiu na rodada 4); `operator_action` e `protocol` aparecem nos turnos de operador. Script estrito: código 0, 67 testes aprovados.
+- Rodada 4 (correções da revisão da rodada 3):
+  - Sair e entrar com outro `sub` (ou token sem `sub`) não herda a conversa, as execuções nem as análises do usuário anterior; reentrar com o mesmo `sub` depois de expirar mantém a conversa.
+  - "Atualizar conversa" acha o turno do operador na ordem real `[merchant, assistant(agent), assistant(operator), merchant]` e não repete turno já mostrado.
+  - Ramo de `via`/`operator_action` no topo do envelope e seu teste removidos; README sem as chaves de acesso.
+  - Script estrito: código 0, 73 testes aprovados; detalhes na [passagem](../evidence/v070-developer-web.md).
 
 ## Status
 
 ```text
-Rodadas 1 a 3 implementadas pelo Developer; a rodada 3 sincronizou o OpenAPI com o backend 7079920. Aguarda revisão.
+Rodadas 1 a 4 implementadas pelo Developer; a rodada 4 corrige os achados da revisão da rodada 3. Aguarda nova revisão.
 ```

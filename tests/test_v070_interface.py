@@ -588,52 +588,234 @@ def test_openapi_snapshot_declares_the_attendant_turn_and_the_form_token_endpoin
     assert "application/x-www-form-urlencoded" in token
 
 
-def test_via_at_the_top_of_the_v1_response_marks_the_attendant_turn(wire):
-    reply = {"answer": "Aqui é a Ana: o crédito cai amanhã.", "route": "support", "status": "answered",
-             "request_id": None}
+# --- round 4 (review of round 3): the real order of a delivered human reply and per-user state ----------------------
 
-    class TopLevelVia(FakeAssistant):
-        def send_message(self, payload):
-            self.posts.append("send_message")
-            message = self.reply | {"conversation_id": payload["conversation_id"]}
-            return {"message": message, "run": None, "via": "operator", "operator_action": "approve"}
+# Shapes captured by the Reviewer from the backend (386025a, task 67 round 3). The /v1/messages answer is
+# {"message": {..., "via": ...}, "run": ...}; a human reply is recorded BEFORE the merchant message that delivers it
+# (D8): [merchant, assistant(agent), assistant(operator), merchant].
+STAMP = "2026-10-26T10:00:00-03:00"
+PROTOCOL = "HO-20261026-0F1286"
+HANDOFF_MESSAGE = {
+    "answer": f"Encaminhei seu caso para um atendente da nossa equipe, que vai responder por aqui. Protocolo: {PROTOCOL}.",
+    "status": "handoff", "route": "human_handoff", "via": "agent", "agents": ["router", "escalation", "personality"],
+    "language": "pt", "sources": [], "request_id": "req_8e1af7b1de2a4308a25e",
+    "resolution": {"state": "handoff", "evidence": None},
+    "handoff": {"protocol": PROTOCOL, "reason": "customer_request"},
+}
+OPERATOR_MESSAGE = {
+    "answer": "Seu repasse foi enviado hoje às 10:00.", "status": "answered", "route": "human_reply",
+    "via": "operator", "agents": ["operator"], "language": "pt", "sources": [],
+    "request_id": "req_25b5c17af09d47dc9b55", "resolution": {"state": "awaiting_customer", "evidence": None},
+    "handoff": None,
+}
+OPERATOR_TURN = {
+    "role": "assistant", "text": OPERATOR_MESSAGE["answer"], "route": "human_reply", "status": "answered",
+    "created_at": STAMP, "via": "operator", "operator_action": "reply", "protocol": PROTOCOL,
+}
+OPERATOR_LABEL = f"Atendente humano · rota human_reply · ação resposta do atendente · protocolo {PROTOCOL}"
 
-    wire(TopLevelVia("merchant", "merchant:cliente1988", reply=reply), FakeTicketing())
-    app = login(real_app(), "cliente1988")
-    app.text_area(key="message_input").set_value("Alguma novidade?")
+
+def merchant_turn(text):
+    return {"role": "merchant", "text": text, "route": "human_reply", "status": None, "created_at": STAMP}
+
+
+def agent_turn(text, route="support", status="answered"):
+    return {"role": "assistant", "text": text, "route": route, "status": status, "created_at": STAMP, "via": "agent"}
+
+
+class ScriptedChat(FakeAssistant):
+    """The assistant as the real backend records a chat: each sent message lands in `turns` before the answer, so a
+    timed-out send still leaves its question there. `outcomes` is consumed one per send: "timeout" (the answer is
+    lost), "fixture" (an automatic answer with its run) or the `message` object to answer with."""
+
+    def __init__(self, *args, outcomes=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.turns, self.outcomes, self.payloads, self.gets = [], list(outcomes), [], 0
+
+    def send_message(self, payload):
+        self.payloads.append(payload)
+        self.posts.append("send_message")
+        self.turns.append(merchant_turn(payload["message"]))
+        outcome = self.outcomes.pop(0)
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("synthetic timeout")
+        if outcome == "fixture":
+            result = SimulatedAPI().send_message(payload)
+            self.turns.append(agent_turn(result["message"]["answer"]))
+            return result
+        if outcome["via"] == "agent":  # an operator turn was recorded when the operator acted, not now
+            self.turns.append(agent_turn(outcome["answer"], outcome["route"], outcome["status"]))
+        return {"message": outcome | {"conversation_id": payload["conversation_id"]}, "run": None}
+
+    def conversation(self, conversation_id):
+        self.gets += 1
+        return {"conversation_id": conversation_id, "state": "awaiting_customer", "messages": list(self.turns)}
+
+
+def send(app, text):
+    app.text_area(key="message_input").set_value(text)
     app.button(key="send_message").click().run()
     assert not app.exception
-    assert any("Atendente humano" in str(item.value) and "rascunho aprovado" in str(item.value)
-               for item in app.caption)
+
+
+def recover(app):
+    app.button(key="recover_pending_conversation").click().run()
+    assert not app.exception
+
+
+def attendant_labels(app):
+    return [str(item.value) for item in app.caption if "Atendente humano" in str(item.value)]
 
 
 def test_conversation_operator_turn_shows_action_and_protocol(wire):
-    question = "Alguma novidade sobre o meu caso?"
-
-    class Recovering(FakeAssistant):
-        def send_message(self, payload):
-            raise httpx.ReadTimeout("synthetic timeout")
-
-        def conversation(self, conversation_id):
-            return {
-                "conversation_id": conversation_id,
-                "state": "awaiting_customer",
-                "messages": [
-                    {"role": "merchant", "text": question},
-                    {"role": "assistant", "text": "Oi, aqui é a Ana: o crédito cai amanhã.", "via": "operator",
-                     "operator_action": "reply", "protocol": "HO-20261103-ABC123", "route": "human_reply",
-                     "status": "answered"},
-                ],
-            }
-
-    wire(Recovering("merchant", "merchant:cliente1988"), FakeTicketing())
+    # The reply to the second message was the operator's turn (D8) and the answer was lost by a timeout.
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, "timeout"])
+    wire(chat, FakeTicketing())
     app = login(real_app(), "cliente1988")
-    app.text_area(key="message_input").set_value(question)
-    app.button(key="send_message").click().run()
-    app.button(key="recover_pending_conversation").click().run()
-    assert not app.exception
-    labels = [str(item.value) for item in app.caption]
-    assert any(
-        "Atendente humano" in label and "resposta do atendente" in label and "HO-20261103-ABC123" in label
-        for label in labels
+    send(app, "Quero falar com um atendente")
+    assert app.session_state["backend_message_count"] == 2 and not attendant_labels(app)
+    chat.turns.append(OPERATOR_TURN)  # the operator acted meanwhile: recorded, not yet delivered
+    send(app, "E aí?")
+    assert [turn["role"] for turn in chat.turns] == ["merchant", "assistant", "assistant", "merchant"]  # real order
+    assert app.session_state["pending_message"]["baseline_message_count"] == 2
+
+    recover(app)
+    assert chat.gets == 1 and chat.posts == ["send_message", "send_message"]
+    assert app.session_state["pending_message"] is None and app.session_state["backend_message_count"] == 4
+    assert app.session_state["chat_history"][-2:] == [
+        {"role": "user", "text": "E aí?"},
+        {"role": "assistant", "text": OPERATOR_TURN["text"], "via": "operator", "operator_action": "reply",
+         "protocol": PROTOCOL},
+    ]
+    assert attendant_labels(app) == [OPERATOR_LABEL]
+    app.run()
+    assert chat.gets == 1 and len(chat.posts) == 2  # a rerun neither reads nor sends again
+
+
+def test_recovery_does_not_show_a_delivered_operator_turn_twice(wire):
+    chat = ScriptedChat(
+        "merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, OPERATOR_MESSAGE, "timeout"]
     )
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Quero falar com um atendente")
+    chat.turns.append(OPERATOR_TURN)
+    send(app, "E aí?")  # D8 on the send path: the answer is the operator turn recorded before the question
+    assert attendant_labels(app) == ["Atendente humano · rota human_reply"]  # the message has no action or protocol
+    assert app.session_state["backend_message_count"] == 4
+
+    send(app, "Mais alguma coisa?")  # lost by a timeout, and nothing answers it yet
+    assert app.session_state["pending_message"]["baseline_message_count"] == 4
+    shown = list(app.session_state["chat_history"])
+    recover(app)
+    assert app.session_state["pending_message"] is not None and app.session_state["chat_history"] == shown
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+
+    chat.turns.append(agent_turn("Posso ajudar com mais alguma coisa?"))  # answered at the backend meanwhile
+    recover(app)
+    assert app.session_state["pending_message"] is None and app.session_state["backend_message_count"] == 6
+    assert app.session_state["chat_history"][-2:] == [
+        {"role": "user", "text": "Mais alguma coisa?"},
+        {"role": "assistant", "text": "Posso ajudar com mais alguma coisa?"},
+    ]
+    assert sum(turn.get("via") == "operator" for turn in app.session_state["chat_history"]) == 1
+    assert len(attendant_labels(app)) == 1
+
+
+def test_recovery_prefers_the_assistant_answer_that_follows_the_question(wire):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, "timeout"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Quero falar com um atendente")
+    chat.turns.append(OPERATOR_TURN)
+    send(app, "E aí?")
+    chat.turns.append(agent_turn("Resposta automática depois da pergunta."))
+    recover(app)
+    assert app.session_state["chat_history"][-1] == {
+        "role": "assistant", "text": "Resposta automática depois da pergunta."
+    }
+    assert app.session_state["backend_message_count"] == 5 and not attendant_labels(app)
+
+
+def test_recovery_without_an_operator_turn_or_an_answer_keeps_the_question_pending(wire):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, "timeout"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Quero falar com um atendente")
+    send(app, "E aí?")
+    recover(app)
+    assert app.session_state["pending_message"] is not None
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+    assert not attendant_labels(app)
+
+
+CONVERSATION_STATE_EMPTY = {
+    "chat_history": [], "conversation_id": None, "backend_message_count": 0, "pending_message": None,
+    "case_view": None, "runs": {}, "latest_run": None, "comparison": None,
+}
+
+
+def merchant_a_conversation(wire, outcomes):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=list(outcomes))
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Pergunta da lojista A")
+    if "timeout" in outcomes:
+        send(app, "Segunda pergunta de A")
+    app.text_area(key="compare_input").set_value("Comparar o texto da lojista A")
+    app.button(key="compare_routers").click().run()
+    assert not app.exception
+    assert app.session_state["conversation_id"] and app.session_state["runs"] and app.session_state["case_view"]
+    assert app.session_state["latest_run"] and app.session_state["chat_history"] and app.session_state["comparison"]
+    return chat, app
+
+
+def assert_nothing_of_a_reaches_b(app, chat, a_conversation):
+    for key, empty in CONVERSATION_STATE_EMPTY.items():
+        assert app.session_state[key] == empty, key
+    assert not app.chat_message and "lojista A" not in texts(app)
+    assert not [button for button in app.button if button.key == "recover_pending_conversation"]
+    assert app.text_area(key="message_input").value == "" and app.text_area(key="compare_input").value == ""
+    send(app, "Pergunta de B")
+    assert chat.payloads[-1]["conversation_id"] not in {None, a_conversation}
+    assert app.session_state["pending_message"] is None and app.session_state["backend_message_count"] == 2
+
+
+def test_logout_then_another_principal_does_not_inherit_the_conversation(wire):
+    chat, app = merchant_a_conversation(wire, ("fixture", "timeout", "fixture"))
+    a_conversation = app.session_state["conversation_id"]
+    assert app.session_state["pending_message"] is not None
+    app.button(key="logout").click().run()
+    assert app.session_state["api_token"] is None and chat.revoked == 1
+    for key, empty in CONVERSATION_STATE_EMPTY.items():
+        assert app.session_state[key] == empty, key  # dropped at logout, before anyone else signs in
+    chat.sub = "merchant:cliente2000"
+    login(app, "cliente2000")
+    assert_nothing_of_a_reaches_b(app, chat, a_conversation)
+
+
+@pytest.mark.parametrize("new_sub", ["merchant:cliente2000", None])
+def test_expiry_then_another_principal_does_not_inherit_the_conversation(wire, new_sub):
+    chat, app = merchant_a_conversation(wire, ("fixture", "timeout", "fixture"))
+    a_conversation = app.session_state["conversation_id"]
+    app.session_state["api_token_exp"] = time.time() - 10
+    app.run()
+    assert app.session_state["api_token"] is None and not app.tabs  # expired: back to the login form
+    chat.sub = new_sub  # a token without `sub` cannot be proven to be the same principal
+    login(app, "cliente2000")
+    assert_nothing_of_a_reaches_b(app, chat, a_conversation)
+
+
+def test_expiry_then_the_same_principal_keeps_the_conversation(wire):
+    chat, app = merchant_a_conversation(wire, ("fixture", "fixture"))
+    a_conversation = app.session_state["conversation_id"]
+    history = list(app.session_state["chat_history"])
+    app.session_state["api_token_exp"] = time.time() - 10
+    app.run()
+    assert app.session_state["api_token"] is None and not app.tabs
+    login(app, "cliente1988")
+    assert app.session_state["chat_history"] == history and app.session_state["conversation_id"] == a_conversation
+    assert "lojista A" in texts(app)
+    send(app, "Mais uma pergunta de A")
+    assert chat.payloads[-1]["conversation_id"] == a_conversation
+    assert app.session_state["backend_message_count"] == 4

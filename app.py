@@ -178,7 +178,7 @@ def send_chat_message(api, payload, message_text):
     st.session_state.chat_history.extend(
         [
             {"role": "user", "text": message_text},
-            assistant_turn(reply["answer"], reply, result),
+            assistant_turn(reply["answer"], reply),
         ]
     )
     request_id = reply.get("request_id")
@@ -208,16 +208,19 @@ def send_chat_message(api, payload, message_text):
     return True
 
 
-def assistant_turn(text, reply, envelope=None):
-    """A turn written or approved by a human attendant (spec v0.7.0, D8): via=operator, route human_reply.
+def is_operator_turn(item):
+    """A reply written or approved by a human attendant (spec v0.7.0, D8): via=operator, route human_reply."""
+    return item.get("via") == "operator" or item.get("route") == "human_reply"
 
-    `via` is read at the top of the /v1/messages response and in its message object (OpenAPI 7079920 declares it in
-    MessageResponse); conversation turns also carry operator_action and protocol, kept for the label."""
+
+def assistant_turn(text, reply):
+    """The assistant turn kept in the chat. `reply` is the `message` object of a /v1/messages answer
+    (`{"message": {..., "via": ...}, "run": ...}`, MessageResponse in the OpenAPI) or a turn of
+    GET /v1/conversations/{id}; the latter also carries operator_action and protocol, kept for the label."""
     turn = {"role": "assistant", "text": text}
-    via = (envelope or {}).get("via") or reply.get("via")
-    if via == "operator" or reply.get("route") == "human_reply":
+    if is_operator_turn(reply):
         turn["via"] = "operator"
-        action = reply.get("operator_action") or (envelope or {}).get("operator_action")
+        action = reply.get("operator_action")
         protocol = reply.get("protocol") or (reply.get("handoff") or {}).get("protocol")
         if action:
             turn["operator_action"] = action
@@ -236,6 +239,12 @@ def attendant_label(turn):
 
 
 def find_pending_reply(conversation, pending):
+    """The reply to the pending question and the backend message count the chat has now consumed, or None.
+
+    The reply is the first assistant turn after the question. Spec v0.7.0 D8 records a human reply BEFORE the
+    merchant message that delivers it ([merchant, assistant(agent), assistant(operator), merchant]), so when no
+    assistant follows the question, the last operator turn between the baseline and the question is the reply. The
+    returned count ends at the reply (or at the question), so a turn already shown is never taken again."""
     messages = conversation.get("messages")
     baseline = pending["baseline_message_count"]
     if not isinstance(messages, list) or baseline < 0 or baseline > len(messages):
@@ -249,12 +258,16 @@ def find_pending_reply(conversation, pending):
     if merchant_index is None or new_messages[merchant_index].get("text") != pending["message"]:
         return None
 
-    for item in new_messages[merchant_index + 1 :]:
-        if item.get("role") == "merchant":
-            return None
-        if item.get("role") == "assistant":
-            return item
-    return None
+    for index in range(merchant_index + 1, len(new_messages)):
+        role = new_messages[index].get("role")
+        if role == "merchant":
+            break
+        if role == "assistant":
+            return new_messages[index], baseline + index + 1
+    delivered = [
+        item for item in new_messages[:merchant_index] if item.get("role") == "assistant" and is_operator_turn(item)
+    ]
+    return (delivered[-1], baseline + merchant_index + 1) if delivered else None
 
 
 def load_scenarios(api):
@@ -578,14 +591,58 @@ def render_comparison(result):
 
 SESSION_KEYS = ("api_token", "api_role", "api_principal", "api_token_exp")
 TICKET_STATE_KEYS = ("ticket_attempt", "ticket_notice", "ticket_confirm_context")
+# Per-user state beyond the token: the conversation, its runs and the analyses started from them. It belongs to
+# `conversation_owner` (the `sub` of the token that created it) and must never reach another principal. Besides the
+# defaults below, these keys hold what the user typed, picked or estimated; they are dropped with the conversation.
+USER_SCRATCH_KEYS = (
+    "message_input",
+    "compare_input",
+    "results_run_choice",
+    "eval_confirm_context",
+    "cmp_confirm_context",
+    "kb_estimate",
+    "admin_notice",
+    *KB_CONFIRMATION_CONTEXTS,
+)
 
 
-def end_session(notice=None):
-    """Forget the token and every client bound to it; the next run shows the login form."""
+def conversation_defaults():
+    return {
+        "chat_history": [],
+        "conversation_id": None,
+        "backend_message_count": 0,
+        "pending_message": None,
+        "recovered_without_request_id": False,
+        "latest_run": None,
+        "runs": {},
+        "case_view": None,
+        "comparison": None,
+        "evaluation_estimate": None,
+        "comparison_estimate": None,
+        "profile_comparison_id": None,
+        "profile_comparison": None,
+        "pending_run_selection": None,
+    }
+
+
+def forget_conversation():
+    """Drop the previous user's conversation, runs and analyses (P2-1)."""
+    st.session_state.update(conversation_defaults())
+    for key in USER_SCRATCH_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state.conversation_owner = None
+
+
+def end_session(notice=None, forget=False):
+    """Forget the token and every client bound to it; the next run shows the login form.
+
+    An expiry keeps the conversation, so the same principal can come back to it; a logout (`forget`) drops it."""
     close_session_client(st.session_state)
     close_ticketing_client(st.session_state)
     for key in (*SESSION_KEYS, *TICKET_STATE_KEYS):
         st.session_state[key] = None
+    if forget:
+        forget_conversation()
     st.session_state.login_notice = notice
 
 
@@ -780,28 +837,16 @@ st.caption("Atendimento, resultados rastreáveis e administração. Chaves de pr
 
 for key, default in {
     "used_comparisons": set(),
-    "chat_history": [],
-    "conversation_id": None,
-    "backend_message_count": 0,
-    "comparison": None,
-    "latest_run": None,
-    "pending_message": None,
-    "recovered_without_request_id": False,
     "api_token": None,
     "api_role": None,
     "api_principal": None,
     "api_token_exp": None,
+    "conversation_owner": None,
     "login_notice": None,
     "ticket_attempt": None,
     "ticket_notice": None,
     "ticket_confirm_context": None,
-    "runs": {},
-    "case_view": None,
-    "evaluation_estimate": None,
-    "comparison_estimate": None,
-    "profile_comparison_id": None,
-    "profile_comparison": None,
-    "pending_run_selection": None,
+    **conversation_defaults(),
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -850,6 +895,9 @@ else:
                 finally:
                     login_client.close()
                 claims = token_claims(session["access_token"])
+                if not claims.get("sub") or claims.get("sub") != st.session_state.conversation_owner:
+                    forget_conversation()  # another (or unknown) principal never inherits the previous conversation
+                st.session_state.conversation_owner = claims.get("sub")
                 st.session_state.api_token = session["access_token"]
                 st.session_state.api_role = claims.get("role")
                 st.session_state.api_principal = claims.get("sub")
@@ -876,7 +924,7 @@ else:
             except (APIError, httpx.TransportError):
                 logout_notice = REVOKE_UNCONFIRMED
             finally:
-                end_session(logout_notice)
+                end_session(logout_notice, forget=True)
             st.rerun()
 if mode == "Real (API)" and not st.session_state.api_token:
     st.warning("Entre com o seu usuário e senha para abrir a sessão.")
@@ -1004,10 +1052,11 @@ with attendance_tab:
         elif st.button("Atualizar conversa", key="recover_pending_conversation"):
             try:
                 conversation = api.conversation(pending["conversation_id"])
-                recovered = find_pending_reply(conversation, pending)
-                if recovered is None:
+                found = find_pending_reply(conversation, pending)
+                if found is None:
                     st.info("Ainda não há resposta nova para esta pergunta. Atualize novamente mais tarde.")
                 else:
+                    recovered, consumed = found
                     st.session_state.chat_history.extend(
                         [
                             {"role": "user", "text": pending["message"]},
@@ -1022,7 +1071,7 @@ with attendance_tab:
                         "knowledge_base_version_id": None,
                     }
                     st.session_state.pending_message = None
-                    st.session_state.backend_message_count += 2
+                    st.session_state.backend_message_count = consumed
                     st.session_state.comparison = None
                     st.session_state.recovered_without_request_id = True
                     st.rerun()

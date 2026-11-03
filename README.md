@@ -28,7 +28,7 @@ Choose **Simulado** for a fully local fixture flow, **Gravado** to replay a save
 
 
 
-The backend README explains how to run the backend with Docker; its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case#streamlit-interface) section covers the `/v1` access keys this interface needs. Sharing by public IP is described in the v0.6.0 [demonstration guide](https://github.com/lauroPereira/ai-getnet-case/blob/67736304ef948db41b082aea9b1b1b20c3f912b5/docs/guia-demonstracao.md), kept in the backend history.
+The backend README explains how to run the backend with Docker; its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case#streamlit-interface) section covers the backend this interface signs in to with a user name and password (v0.7.0). Sharing by public IP is described in the v0.6.0 [demonstration guide](https://github.com/lauroPereira/ai-getnet-case/blob/67736304ef948db41b082aea9b1b1b20c3f912b5/docs/guia-demonstracao.md), kept in the backend history.
 
 
 
