@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 
 import altair as alt
@@ -8,8 +9,15 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-from getnet_web.api import APIClient, APIError, close_session_client, get_session_client
+from getnet_web.api import APIClient, APIError, close_session_client, get_session_client, session_ended, token_claims
 from getnet_web.simulated import SimulatedAPI
+from getnet_web.ticketing import (
+    STATUSES,
+    close_ticketing_client,
+    get_ticketing_client,
+    new_idempotency_key,
+    ticketing_url,
+)
 
 MODE_LABELS = {
     "real": "Execução real (provedores via backend)",
@@ -26,6 +34,21 @@ RECOVERY_BY_STATUS = {
     503: "O serviço está temporariamente indisponível. Aguarde alguns instantes e tente novamente.",
 }
 RECOVERY_BY_CODE = {
+    "invalid_grant": "Usuário ou senha incorretos. Confira e tente de novo.",
+    "invalid_client": "A interface não está registrada como cliente no backend. Peça ao administrador.",
+    "invalid_request": "O pedido de login foi recusado. Confira usuário e senha.",
+    "too_many_attempts": "Muitas tentativas de login. Aguarde o tempo indicado e tente de novo.",
+    "token_required": "A sessão expirou ou foi encerrada. Entre novamente.",
+    "invalid_token": "A sessão expirou ou foi encerrada. Entre novamente.",
+    "insufficient_scope": "Esta ação não é permitida para o seu papel.",
+    "claimed_by_other": "Outro operador já assumiu este caso. Atualize a fila e escolha outro ticket.",
+    "already_resumed": "Este caso já recebeu uma ação de atendente. Atualize para ver o estado atual.",
+    "delivery_pending": "Um envio anterior deste ticket ainda está pendente. Atualize e tente depois.",
+    "ticket_solved": "O ticket já foi resolvido. Atualize a fila.",
+    "idempotency_key_reused": "Esta tentativa já foi usada para outra ação. Atualize e envie de novo.",
+    "unknown_operator": "O seu usuário não é um operador ativo no assistente. Peça ao administrador.",
+    "case_not_found": "O caso não existe mais no assistente. Atualize a fila.",
+    "assistant_rejected": "O assistente recusou a credencial do serviço de ticketing. Peça ao administrador.",
     "demo_message_limit_reached": "Esta sessão demo atingiu o limite de mensagens. Encerre a sessão e entre de novo, "
     "ou peça ao administrador.",
     "comparison_running": "Já há uma comparação em andamento. Use “Atualizar comparação”.",
@@ -33,6 +56,9 @@ RECOVERY_BY_CODE = {
     "evaluator_price_unknown": "O preço do avaliador é desconhecido; a avaliação fica bloqueada.",
 }
 TRANSPORT_RECOVERY = "A conexão com o backend falhou. Nada foi reenviado; atualize por consulta (GET) mais tarde."
+SESSION_EXPIRED = "Sua sessão expirou ou foi encerrada. Entre novamente."
+STATUS_LABELS = {"new": "Recepção", "open": "Atendimento", "pending": "Envio", "solved": "Finalização"}
+ACTION_LABELS = {"approve": "Aprovar o rascunho", "reply": "Responder", "reject": "Rejeitar com instrução"}
 
 
 def explain(exc: APIError) -> str:
@@ -143,7 +169,10 @@ def send_chat_message(api, payload, message_text):
     reply = result["message"]
     st.session_state.conversation_id = reply.get("conversation_id") or conversation_id
     st.session_state.chat_history.extend(
-        [{"role": "user", "text": message_text}, {"role": "assistant", "text": reply["answer"]}]
+        [
+            {"role": "user", "text": message_text},
+            assistant_turn(reply["answer"], reply),
+        ]
     )
     request_id = reply.get("request_id")
     if request_id and result.get("run"):
@@ -170,6 +199,14 @@ def send_chat_message(api, payload, message_text):
     st.session_state.recovered_without_request_id = False
     st.session_state.comparison = None
     return True
+
+
+def assistant_turn(text, reply):
+    """A turn written by a human attendant (spec v0.7.0, D8) carries via=operator (route human_reply)."""
+    turn = {"role": "assistant", "text": text}
+    if reply.get("via") == "operator" or reply.get("route") == "human_reply":
+        turn["via"] = "operator"
+    return turn
 
 
 def find_pending_reply(conversation, pending):
@@ -513,6 +550,203 @@ def render_comparison(result):
             open_runs([openable[cell_labels.index(cell_choice)]["request_id"]])
 
 
+SESSION_KEYS = ("api_token", "api_role", "api_principal", "api_token_exp")
+TICKET_STATE_KEYS = ("ticket_attempt", "ticket_notice", "ticket_confirm_context")
+
+
+def end_session(notice=None):
+    """Forget the token and every client bound to it; the next run shows the login form."""
+    close_session_client(st.session_state)
+    close_ticketing_client(st.session_state)
+    for key in (*SESSION_KEYS, *TICKET_STATE_KEYS):
+        st.session_state[key] = None
+    st.session_state.login_notice = notice
+
+
+def ticket_notice(kind, text):
+    st.session_state.ticket_notice = {"kind": kind, "text": text}
+
+
+def ticket_failure(exc):
+    """Map a ticketing failure to a message with its recovery action. Returns True when the session ended."""
+    if session_ended(exc):
+        end_session(SESSION_EXPIRED)
+        return True
+    if isinstance(exc, APIError):
+        ticket_notice("error", explain(exc))
+    else:
+        ticket_notice(
+            "warning",
+            "O ticketing não confirmou o envio (falha de conexão). Clique de novo no mesmo botão para reenviar a "
+            "mesma ação com a mesma chave, ou use Atualizar para conferir o estado.",
+        )
+    return False
+
+
+def ticket_outcome(result, done_text):
+    delivery = (result or {}).get("delivery") or {}
+    if delivery.get("status") == "delivered":
+        ticket_notice("success", done_text)
+        return True
+    ticket_notice(
+        "warning",
+        "Envio pendente: o ticketing guardou a ação e vai tentar de novo com o assistente. Use Atualizar para "
+        "acompanhar; clicar de novo reaproveita a mesma chave e não cria outra ação.",
+    )
+    return False
+
+
+def render_ticket_detail(detail):
+    status = detail.get("status")
+    st.subheader(f"{detail.get('protocol') or detail['ticket_id']} · {STATUS_LABELS.get(status, status)}")
+    st.caption(
+        f"Ticket {detail['ticket_id']} · caso {detail.get('case_id')} · lojista {detail.get('customer_id') or '—'} · "
+        f"idioma {detail.get('language') or '—'} · motivo {detail.get('reason') or '—'} · responsável "
+        f"{detail.get('assignee') or '—'} · caso no assistente {detail.get('case_state') or '—'} · fila "
+        f"{detail.get('queue_state') or '—'}"
+    )
+    delivery = detail.get("delivery") or {}
+    if delivery.get("status") in {"pending", "failed"}:
+        st.warning(
+            f"Envio pendente ({delivery.get('event_type')}, {delivery.get('attempts')} tentativa(s), estado "
+            f"{delivery.get('status')}). Use Atualizar para acompanhar."
+        )
+    if detail.get("reply_delivered_at"):
+        st.success(f"Resposta entregue ao lojista em {detail['reply_delivered_at']}.")
+        if detail.get("reply_text"):
+            st.markdown(literal(detail["reply_text"]))
+    if detail.get("closed_at"):
+        st.info(f"Caso fechado no assistente em {detail['closed_at']} por {detail.get('closed_by') or '—'}.")
+    st.markdown(f"**Resumo:** {literal(detail.get('summary') or '—')}")
+    st.markdown(f"**Pergunta pendente:** {literal(detail.get('pending_question') or '—')}")
+    st.markdown(f"**Rascunho do atendente:** {literal(detail.get('draft_reply') or '—')}")
+    with st.expander("Conversa (mascarada)", expanded=False):
+        for turn in detail.get("transcript") or []:
+            with st.chat_message("user" if turn.get("role") in {"user", "merchant"} else "assistant"):
+                st.caption(turn.get("at") or "")
+                st.markdown(literal(turn.get("text")))
+    with st.expander("Histórico do ticket", expanded=False):
+        st.dataframe(
+            [
+                {
+                    "quando": event.get("at"),
+                    "evento": event.get("kind"),
+                    "de": event.get("from_status"),
+                    "para": event.get("to_status"),
+                    "por": event.get("actor"),
+                }
+                for event in detail.get("events") or []
+            ],
+            hide_index=True,
+        )
+    with st.expander("Entregas nos dois sentidos", expanded=False):
+        deliveries = detail.get("deliveries") or {}
+        st.caption("Recebidas do assistente")
+        st.dataframe(deliveries.get("received") or [], hide_index=True)
+        st.caption("Enviadas ao assistente")
+        st.dataframe(
+            [
+                {
+                    "evento": sent.get("event_type"),
+                    "estado": sent.get("status"),
+                    "resposta": sent.get("response_status"),
+                    "tentativas": len(sent.get("attempts") or []),
+                    "chave": sent.get("idempotency_key"),
+                }
+                for sent in deliveries.get("sent") or []
+            ],
+            hide_index=True,
+        )
+
+
+def render_ticket_actions(client, detail):
+    ticket_id, status = detail["ticket_id"], detail.get("status")
+    if status == "solved":
+        st.info("Ticket resolvido. Nenhuma ação disponível.")
+        return
+    if status == "new" and st.button("Assumir", key="ticket_assign"):
+        try:
+            ticket_outcome(client.assign(ticket_id), "Ticket assumido. Ele aparece na fila Atendimento.")
+        except (APIError, httpx.TransportError) as exc:
+            ticket_failure(exc)
+        st.rerun()
+    if status not in {"open", "pending"}:
+        return
+
+    st.markdown("**Ação do atendente**")
+    action = st.radio("Ação", list(ACTION_LABELS), format_func=ACTION_LABELS.get, horizontal=True, key="ticket_action")
+    reset_confirmation_context("ticket_confirm_context", (ticket_id, action), "ticket_confirm")
+    if action == "approve":
+        st.caption("Aprovar envia ao lojista o rascunho mostrado acima, sem alterações.")
+        text = ""
+    else:
+        label = "Resposta ao lojista" if action == "reply" else "Instrução para o assistente refazer a resposta"
+        text = st.text_area(label, key=f"ticket_text_{action}", height=90)
+    confirmed = st.checkbox("Confirmo o envio desta ação ao assistente", key="ticket_confirm")
+    ready = confirmed and (action == "approve" or bool(text.strip()))
+    if st.button("Enviar ação", key="ticket_send", disabled=not ready):
+        signature = [ticket_id, action, text]
+        attempt = st.session_state.ticket_attempt
+        key = attempt["key"] if attempt and attempt["signature"] == signature else new_idempotency_key()
+        st.session_state.ticket_attempt = {"signature": signature, "key": key}
+        try:
+            if ticket_outcome(client.act(ticket_id, action, text, key), "Ação enviada e aceita pelo assistente."):
+                st.session_state.ticket_attempt = None
+            st.session_state.ticket_confirm_context = None
+        except httpx.TransportError as exc:
+            ticket_failure(exc)  # keep the attempt: the next click resends the same key
+        except APIError as exc:
+            st.session_state.ticket_attempt = None
+            st.session_state.ticket_confirm_context = None
+            ticket_failure(exc)
+        st.rerun()
+
+    st.markdown("**Finalização**")
+    solve_confirmed = st.checkbox("Confirmo que o atendimento terminou", key="ticket_solve_confirm")
+    if st.button("Resolver", key="ticket_solve", disabled=not solve_confirmed):
+        try:
+            ticket_outcome(client.solve(ticket_id), "Ticket resolvido; o caso foi fechado no assistente.")
+        except (APIError, httpx.TransportError) as exc:
+            ticket_failure(exc)
+        st.rerun()
+
+
+def render_ticketing(token):
+    url = ticketing_url()
+    client = get_ticketing_client(st.session_state, url, token)
+    st.caption(f"Serviço de ticketing: {url} · operador {st.session_state.api_principal or '—'}")
+    notice = st.session_state.ticket_notice
+    if notice:
+        getattr(st, notice["kind"])(notice["text"])
+        st.session_state.ticket_notice = None
+    status = st.radio("Fila", STATUSES, format_func=STATUS_LABELS.get, horizontal=True, key="ticket_status")
+    if st.button("Atualizar", key="ticket_refresh"):
+        st.rerun()
+    try:
+        tickets = client.tickets(status)
+        if not tickets:
+            st.info(f"Nenhum ticket na fila {STATUS_LABELS[status]}.")
+            return
+        labels = {
+            f"{item.get('protocol') or item['ticket_id']} · {item.get('customer_id') or '—'} · "
+            f"{(item.get('summary') or '')[:60]}": item["ticket_id"]
+            for item in tickets
+        }
+        choice = st.selectbox("Ticket", list(labels), key="ticket_choice")
+        detail = client.ticket(labels[choice])
+    except APIError as exc:
+        if session_ended(exc):
+            end_session(SESSION_EXPIRED)
+            st.rerun()
+        st.error(f"Não foi possível ler o ticketing: {explain(exc)}")
+        return
+    except httpx.TransportError:
+        st.error("Ticketing inacessível. Confira TICKETING_URL e se o serviço está em execução; depois use Atualizar.")
+        return
+    render_ticket_detail(detail)
+    render_ticket_actions(client, detail)
+
+
 st.set_page_config(page_title="Getnet Merchant Assistant", page_icon="💬", layout="wide")
 st.title("Assistente Getnet")
 st.caption("Atendimento, resultados rastreáveis e administração. Chaves de provedores ficam no backend.")
@@ -528,6 +762,12 @@ for key, default in {
     "recovered_without_request_id": False,
     "api_token": None,
     "api_role": None,
+    "api_principal": None,
+    "api_token_exp": None,
+    "login_notice": None,
+    "ticket_attempt": None,
+    "ticket_notice": None,
+    "ticket_confirm_context": None,
     "runs": {},
     "case_view": None,
     "evaluation_estimate": None,
@@ -559,25 +799,48 @@ else:
         # A shared (public) interface keeps the backend address fixed by the operator.
         disabled=os.environ.get("LOCK_BACKEND_URL", "").lower() in {"1", "true", "yes"},
     )
+    token_exp = st.session_state.api_token_exp
+    if st.session_state.api_token and token_exp and time.time() >= token_exp:
+        end_session(SESSION_EXPIRED)
+    role = st.session_state.api_role
     if not st.session_state.api_token:
-        access_key = st.sidebar.text_input("Chave de acesso demo/admin", type="password")
-        if st.sidebar.button("Entrar", key="login"):
+        if st.session_state.login_notice:
+            st.sidebar.warning(st.session_state.login_notice)
+        login_form = st.sidebar.form("login_form", clear_on_submit=True)
+        with login_form:
+            username = st.text_input("Usuário", key="login_username")
+            password = st.text_input("Senha", type="password", key="login_password")
+            submitted = st.form_submit_button("Entrar", key="login")
+        if submitted:
+            # The form already clears its fields; dropping the keys also covers runs that stop early (operator area).
+            for login_key in ("login_username", "login_password"):
+                st.session_state.pop(login_key, None)
+        if submitted and username.strip() and password:
             try:
                 login_client = APIClient(base_url)
                 try:
-                    session = login_client.login(access_key)
+                    session = login_client.login(username.strip(), password)
                 finally:
                     login_client.close()
+                claims = token_claims(session["access_token"])
                 st.session_state.api_token = session["access_token"]
-                st.session_state.api_role = session["role"]
-                role = session["role"]
+                st.session_state.api_role = claims.get("role")
+                st.session_state.api_principal = claims.get("sub")
+                expires_in = session.get("expires_in")
+                st.session_state.api_token_exp = claims.get("exp") or (
+                    time.time() + float(expires_in) if expires_in else None
+                )
+                st.session_state.login_notice = None
                 st.rerun()
             except APIError as exc:
                 st.sidebar.error(f"Não foi possível entrar: {explain(exc)}")
             except httpx.TransportError:
                 st.sidebar.error("Backend inacessível. Confira a URL da API e se o backend está em execução.")
     else:
-        st.sidebar.success(f"Sessão ativa · papel {st.session_state.api_role}")
+        principal = st.session_state.api_principal
+        st.sidebar.success(
+            f"Sessão ativa · papel {st.session_state.api_role}" + (f" · {principal}" if principal else "")
+        )
         if st.sidebar.button("Encerrar sessão", key="logout"):
             logout_client = get_session_client(st.session_state, base_url, st.session_state.api_token)
             try:
@@ -585,19 +848,25 @@ else:
             except (APIError, httpx.TransportError):
                 pass
             finally:
-                close_session_client(st.session_state)
-            st.session_state.api_token = None
-            st.session_state.api_role = None
+                end_session()
             st.rerun()
 if mode == "Real (API)" and not st.session_state.api_token:
-    st.warning("Entre com uma chave de acesso configurada no backend para abrir a sessão.")
+    st.warning("Entre com o seu usuário e senha para abrir a sessão.")
     st.stop()
 if mode == "Real (API)":
     api = get_session_client(st.session_state, base_url, st.session_state.api_token)
+if mode == "Real (API)" and role == "operator":
+    (ticketing_tab,) = st.tabs(["Ticketing"])
+    with ticketing_tab:
+        render_ticketing(st.session_state.api_token)
+    st.stop()
 
 try:
     profile_items = api.profiles()
 except APIError as exc:
+    if session_ended(exc):
+        end_session(SESSION_EXPIRED)
+        st.rerun()
     st.error(f"Não foi possível carregar perfis: {explain(exc)}")
     st.stop()
 except httpx.TransportError:
@@ -638,7 +907,10 @@ with attendance_tab:
     chosen_scenario = scenario_labels[chosen_label]
 
     for turn in st.session_state.chat_history:
-        with st.chat_message(turn["role"]):
+        attendant = turn.get("via") == "operator"
+        with st.chat_message(turn["role"], avatar="🧑‍💼" if attendant else None):
+            if attendant:
+                st.caption("Atendente humano · rota human_reply")
             st.markdown(literal(turn["text"]))
     case_view = st.session_state.case_view
     if case_view:
@@ -711,7 +983,7 @@ with attendance_tab:
                     st.session_state.chat_history.extend(
                         [
                             {"role": "user", "text": pending["message"]},
-                            {"role": "assistant", "text": recovered.get("text")},
+                            assistant_turn(recovered.get("text"), recovered),
                         ]
                     )
                     st.session_state.case_view = {

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
 import os
 import time
@@ -20,6 +23,13 @@ DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_TIMEOUT_SECONDS", "20"))
 LONG_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_MESSAGE_TIMEOUT_SECONDS", "105"))
 LONG_OPERATIONS = frozenset({"send_v1_message", "compare_routers", "create_evaluation", "kb_build", "kb_test"})
 
+# Identity routes of the v0.7.0 contract (backend spec "identidade-hitl-v070", "Contrato entre os times"). They are not
+# in openapi-v1.json yet: when the reviewed backend OpenAPI is synchronized, these move to generated_api.py.
+AUTH_TOKEN_ROUTE = "/v1/auth/token"
+AUTH_REVOKE_ROUTE = "/v1/auth/revoke"
+WEB_CLIENT_ID = os.environ.get("AUTH_CLIENT_ID", "merchant-assistant-web")
+SESSION_ENDED_CODES = frozenset({"token_required", "invalid_token"})
+
 
 class APIError(RuntimeError):
     def __init__(self, status_code: int, code: str, message: str) -> None:
@@ -28,10 +38,26 @@ class APIError(RuntimeError):
         self.code = code
 
 
+def token_claims(token: str | None) -> dict:
+    """Claims of a JWT read without verification, only to label the session in the interface (role, principal, expiry).
+    Authorization is always decided by the backend and the ticketing service."""
+    try:
+        payload = (token or "").split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError, binascii.Error):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def session_ended(exc: Exception) -> bool:
+    """A 401 from the backend or the ticketing service: the token is missing, expired or revoked."""
+    return isinstance(exc, APIError) and exc.status_code == 401 and exc.code in SESSION_ENDED_CODES
+
+
 class API(Protocol):
     execution_mode: str
 
-    def login(self, access_key: str) -> dict: ...
+    def login(self, username: str, password: str) -> dict: ...
     def logout(self) -> None: ...
     def model_catalog(self) -> dict: ...
     def profiles(self) -> list[dict]: ...
@@ -108,14 +134,35 @@ class APIClient:
             )
         return None if response.status_code == 204 else response.json()
 
-    def login(self, access_key: str) -> dict:
-        result = self._request("create_session", body={"access_key": access_key}, authenticated=False)
+    def login(self, username: str, password: str) -> dict:
+        """Password grant (RFC 6749) for the public web client. Errors follow RFC 6749 section 5.2."""
+        form = {"grant_type": "password", "username": username, "password": password, "client_id": WEB_CLIENT_ID}
+        try:
+            response = self._http.post(AUTH_TOKEN_ROUTE, data=form)
+        except httpx.TransportError as exc:
+            log.warning("Backend login transport failed", extra={"event": {"error_class": type(exc).__name__}})
+            raise
+        if response.status_code >= 400:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            code = data.get("error") if isinstance(data, dict) and isinstance(data.get("error"), str) else "http_error"
+            message = (data.get("error_description") if isinstance(data, dict) else None) or "Login failed."
+            if response.status_code == 429:
+                retry = response.headers.get("Retry-After")
+                code, message = "too_many_attempts", f"Too many attempts. Retry after {retry or 'a few'} seconds."
+            raise APIError(response.status_code, code, message)
+        result = response.json()
         self._token = result["access_token"]
         return result
 
     def logout(self) -> None:
-        self._request("revoke_session")
+        """Revokes the token's jti on the backend (POST /v1/auth/revoke)."""
+        response = self._http.post(AUTH_REVOKE_ROUTE, headers={"Authorization": f"Bearer {self._token}"})
         self._token = None
+        if response.status_code >= 400 and response.status_code != 401:
+            raise APIError(response.status_code, "revoke_failed", "The backend did not confirm the logout.")
 
     def model_catalog(self) -> dict:
         return self._request("model_catalog")
