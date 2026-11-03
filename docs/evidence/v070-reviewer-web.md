@@ -33,3 +33,12 @@ Comprovados: CA-47 na tela (recepção, assumir, três ações, envio pendente, 
 ### Depende da sincronização do OpenAPI (pendente de propósito)
 
 Rotas `/v1/auth/token` e `/v1/auth/revoke` fixadas à mão em `api.py`; `generated_api.py:4-5` ainda lista `create_session`/`revoke_session` (não usados); `/v1/messages` sem schema de resposta e sem `via` no `openapi-v1.json` (a tela aceita `via=operator` ou `route=human_reply`); turnos de conversa com `operator_action` e `protocol` ainda não exibidos.
+
+## Tarefa 67, rodada 2 — apto para QA (mantido)
+
+- **Papel:** revalidação de escopo pelo mesmo Reviewer, sem a passagem do Developer.
+- **Candidato:** diff `03fe6e4..0f99b2b` (`app.py`, `src/getnet_web/ticketing.py`, `tests/test_v070_interface.py` com 5 testes novos); HEAD e árvore iguais antes e depois.
+- **Números:** script estrito (`--basetemp .pytest_cache/v070-web-review-r2-strict`) **64 passed** (eram 59), Ruff limpo, código 0.
+- **Sonda HTTP refeita onde o diff toca:** `GET /tickets` com HTML ou `tickets` que não é lista → "Não foi possível ler o ticketing…" sem exceção; ação com `200` texto, `200` lista e `200` válido → `invalid_response` nas duas primeiras com confirmação mantida, **os 3 POSTs com a mesma `idempotency_key`**, nenhum POST extra; logout com revoke fora do ar ou `500` → token apagado e aviso de revogação não confirmada; com `401` ou `204` → token apagado sem aviso; senha fora do `session_state`.
+- **Mutação:** 6/6 mortas, inclusive as duas que sobreviviam na rodada 1 (`pending-resets-key`, `no-end-on-401-ticket`), além de `revoke-notice-off`, `invalid-resp-resets-key`, `client-json-unguarded`, `ticket-shape-unguarded`.
+- **P3 da rodada 1:** P3-1 (aviso `REVOKE_UNCONFIRMED`, `app.py:851-859`), P3-2, P3-3 e P3-4 (`ticketing.py:54-72`, `502 invalid_response`, chave e confirmação mantidas) atendidos. O que depende da sincronização do OpenAPI segue igual e não conta como defeito.
