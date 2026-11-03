@@ -474,3 +474,104 @@ def test_ticketing_client_routes_bearer_body_and_errors():
     assert json.loads(observed[1].content) == {"action": "reply", "text": "texto", "idempotency_key": "web-key-0001"}
     assert all(r.headers["authorization"] == "Bearer tok" for r in observed)
     client.close()
+
+
+# --- round 2 (P3 of the review of task 67) -------------------------------------------------------------------------
+
+
+def test_unconfirmed_revocation_is_announced(wire):
+    """P3-1: the session ends locally and the screen says the backend did not confirm the revocation."""
+
+    class Unreachable(FakeAssistant):
+        def logout(self):
+            raise httpx.ConnectError("backend down")
+
+    wire(Unreachable("merchant", "merchant:cliente1988"), FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    app.button(key="logout").click().run()
+    assert app.session_state["api_token"] is None and not app.tabs
+    assert any("não confirmou a revogação" in str(item.value) for item in app.sidebar.warning)
+
+
+def test_repeating_an_action_after_a_pending_send_reuses_the_key(wire):
+    """P3-2: after a 202 ("envio pendente"), clicking again resends the same idempotency key."""
+    ticketing = FakeTicketing(ticket("tkt_00000p", "open"))
+    ticketing.fail["act_pending"] = [True]
+    app = operator_app(wire, ticketing)
+    app.radio(key="ticket_status").set_value("open").run()
+    app.radio(key="ticket_action").set_value("approve").run()
+    app.checkbox(key="ticket_confirm").check().run()
+    app.button(key="ticket_send").click().run()
+    assert any("Envio pendente" in str(item.value) for item in app.warning)
+    app.checkbox(key="ticket_confirm").check().run()
+    app.button(key="ticket_send").click().run()
+    first, second = ticketing.posts[-2], ticketing.posts[-1]
+    assert first[0] == second[0] == "act" and first[4] == second[4]
+    assert not app.exception
+
+
+def test_401_on_a_ticketing_post_ends_the_session(wire):
+    """P3-3: a POST answered with 401 invalid_token returns to the login with the expiry message."""
+    ticketing = FakeTicketing(ticket("tkt_00000q", "open"))
+    ticketing.fail["act"] = [APIError(401, "invalid_token", "Token expired.")]
+    app = operator_app(wire, ticketing)
+    app.radio(key="ticket_status").set_value("open").run()
+    app.radio(key="ticket_action").set_value("approve").run()
+    app.checkbox(key="ticket_confirm").check().run()
+    app.button(key="ticket_send").click().run()  # the fake's reads never answer 401: only the POST can end it
+    assert ticketing.posts[-1][0] == "act"
+    assert app.session_state["api_token"] is None and not app.tabs
+    assert any("expirou" in str(item.value) for item in app.sidebar.warning)
+
+
+def _text_ticketing(monkeypatch, handler):
+    client = TicketingClient("http://127.0.0.1:8002", token="tok", transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("getnet_web.ticketing.get_ticketing_client", lambda *_args, **_kwargs: client)
+    return client
+
+
+def test_non_json_2xx_from_the_ticketing_does_not_break_the_screen(wire, monkeypatch):
+    """P3-4: a 2xx outside the contract becomes an error with a recovery action, on reads and on acts."""
+    wire(FakeAssistant())
+    posts = []
+
+    def handler(request):
+        if request.method == "GET" and request.url.path == "/tickets":
+            return httpx.Response(200, text="<html>proxy</html>")
+        return httpx.Response(200, json={})
+
+    _text_ticketing(monkeypatch, handler)
+    app = login(real_app())
+    assert not app.exception
+    assert any("formato inesperado" in str(item.value) and "Atualizar" in str(item.value) for item in app.error)
+
+    item = ticket("tkt_00000r", "open")
+
+    def acting(request):
+        if request.method == "GET":
+            body = {"tickets": [item]} if request.url.path == "/tickets" else item
+            return httpx.Response(200, json=body)
+        posts.append(json.loads(request.content))
+        return httpx.Response(200, text="ok")
+
+    _text_ticketing(monkeypatch, acting)
+    app.radio(key="ticket_status").set_value("open").run()
+    app.radio(key="ticket_action").set_value("approve").run()
+    app.checkbox(key="ticket_confirm").check().run()
+    app.button(key="ticket_send").click().run()
+    assert not app.exception
+    assert any("formato inesperado" in str(item.value) for item in app.error)
+    app.button(key="ticket_send").click().run()  # outcome unknown: the retry keeps the same key
+    assert len(posts) == 2 and posts[0]["idempotency_key"] == posts[1]["idempotency_key"]
+
+
+def test_ticketing_client_rejects_bodies_outside_the_contract():
+    responses = iter([httpx.Response(200, text="nope"), httpx.Response(200, json=[1]), httpx.Response(200, json={})])
+    client = TicketingClient(
+        "http://127.0.0.1:8002", token="tok", transport=httpx.MockTransport(lambda request: next(responses))
+    )
+    for call in (lambda: client.tickets(), lambda: client.tickets(), lambda: client.ticket("tkt_1")):
+        with pytest.raises(APIError) as error:
+            call()
+        assert (error.value.status_code, error.value.code) == (502, "invalid_response")
+    client.close()

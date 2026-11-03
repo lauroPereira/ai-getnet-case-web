@@ -88,3 +88,27 @@
 
 - Ação externa: nenhuma (sem push). Commits com `lauroPereira <lauro.s.pereira@gmail.com>`, identidade conferida.
 - Próxima ação: revisão independente da 67; o Supervisor indica o commit do backend para a sincronização do OpenAPI.
+
+## Tarefa 67, rodada 2
+
+- Papel e responsável: Developer do Time B, rodada curta de P3 pedida pelo Supervisor depois do apto para QA ([parecer](v070-reviewer-web.md), commit `03fe6e4`).
+- Escopo: `app.py`, `src/getnet_web/ticketing.py`, `tests/test_v070_interface.py` e esta passagem. Base `03fe6e4`; versão final é o commit desta rodada. Não-independente (relato do autor).
+
+### Mudanças
+
+- **P3-1, revogação não confirmada:** se `/v1/auth/revoke` falhar (erro do backend ou de transporte), a sessão termina na interface do mesmo jeito e a barra lateral avisa que o backend não confirmou a revogação e que o token pode continuar válido até expirar. Teste: `test_unconfirmed_revocation_is_announced`.
+- **P3-2, repetição após `202`:** clicar de novo depois de um envio pendente reenvia a mesma `idempotency_key`. Teste: `test_repeating_an_action_after_a_pending_send_reuses_the_key`.
+- **P3-3, `401` em POST do ticketing:** `401 invalid_token` numa ação encerra a sessão e volta ao login com a mensagem de expiração. As leituras do falso nunca respondem `401`, então só o POST pode encerrar. Teste: `test_401_on_a_ticketing_post_ends_the_session`.
+- **P3-4, `2xx` fora do contrato:** o `TicketingClient` transforma em `502 invalid_response` três casos: corpo que não é JSON, JSON que não é objeto, e lista ou detalhe sem os campos esperados.
+  - A tela mostra erro com recuperação: "Use Atualizar para conferir o estado antes de repetir".
+  - Numa ação, o resultado é desconhecido, então a tentativa e a confirmação são mantidas e um novo clique reenvia a mesma chave.
+  - Testes: `test_non_json_2xx_from_the_ticketing_does_not_break_the_screen`, na leitura e na ação; `test_ticketing_client_rejects_bodies_outside_the_contract`.
+
+### Evidência
+
+- Script estrito (`--basetemp .pytest_cache/v070-web-strict`) → código 0, **64 testes aprovados** (59 + 5), ruff limpo.
+- Nenhuma chamada paga, nenhum serviço real; sem push.
+
+### Pendente de propósito
+
+Sincronização do OpenAPI (`/v1/auth/*`, `/v1/handoffs`, `via` em `/v1/messages`), quando o Supervisor indicar o commit do backend.

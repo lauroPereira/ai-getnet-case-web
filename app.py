@@ -49,6 +49,8 @@ RECOVERY_BY_CODE = {
     "unknown_operator": "O seu usuário não é um operador ativo no assistente. Peça ao administrador.",
     "case_not_found": "O caso não existe mais no assistente. Atualize a fila.",
     "assistant_rejected": "O assistente recusou a credencial do serviço de ticketing. Peça ao administrador.",
+    "invalid_response": "O ticketing respondeu num formato inesperado. Use Atualizar para conferir o estado antes de "
+    "repetir; repetir a mesma ação reaproveita a mesma chave.",
     "demo_message_limit_reached": "Esta sessão demo atingiu o limite de mensagens. Encerre a sessão e entre de novo, "
     "ou peça ao administrador.",
     "comparison_running": "Já há uma comparação em andamento. Use “Atualizar comparação”.",
@@ -57,6 +59,10 @@ RECOVERY_BY_CODE = {
 }
 TRANSPORT_RECOVERY = "A conexão com o backend falhou. Nada foi reenviado; atualize por consulta (GET) mais tarde."
 SESSION_EXPIRED = "Sua sessão expirou ou foi encerrada. Entre novamente."
+REVOKE_UNCONFIRMED = (
+    "Você saiu desta interface, mas o backend não confirmou a revogação do token: ele pode continuar válido até "
+    "expirar. Se a sessão foi usada em um computador compartilhado, avise o administrador."
+)
 STATUS_LABELS = {"new": "Recepção", "open": "Atendimento", "pending": "Envio", "solved": "Finalização"}
 ACTION_LABELS = {"approve": "Aprovar o rascunho", "reply": "Responder", "reject": "Rejeitar com instrução"}
 
@@ -696,8 +702,9 @@ def render_ticket_actions(client, detail):
         except httpx.TransportError as exc:
             ticket_failure(exc)  # keep the attempt: the next click resends the same key
         except APIError as exc:
-            st.session_state.ticket_attempt = None
-            st.session_state.ticket_confirm_context = None
+            if exc.code != "invalid_response":  # an unreadable 2xx: the outcome is unknown, keep the key
+                st.session_state.ticket_attempt = None
+                st.session_state.ticket_confirm_context = None
             ticket_failure(exc)
         st.rerun()
 
@@ -843,12 +850,13 @@ else:
         )
         if st.sidebar.button("Encerrar sessão", key="logout"):
             logout_client = get_session_client(st.session_state, base_url, st.session_state.api_token)
+            logout_notice = None
             try:
                 logout_client.logout()
             except (APIError, httpx.TransportError):
-                pass
+                logout_notice = REVOKE_UNCONFIRMED
             finally:
-                end_session()
+                end_session(logout_notice)
             st.rerun()
 if mode == "Real (API)" and not st.session_state.api_token:
     st.warning("Entre com o seu usuário e senha para abrir a sessão.")

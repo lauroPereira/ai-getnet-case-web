@@ -51,13 +51,25 @@ class TicketingClient:
                 error.get("code", "http_error"),
                 error.get("message", "Ticketing request failed."),
             )
-        return response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):  # outside the contract: never let it break the screen
+            raise APIError(502, "invalid_response", "The ticketing service answered without a JSON object.")
+        return data
 
     def tickets(self, status: str | None = None) -> list[dict]:
-        return self._request("GET", "/tickets", params={"status": status} if status else None)["tickets"]
+        tickets = self._request("GET", "/tickets", params={"status": status} if status else None).get("tickets")
+        if not isinstance(tickets, list):
+            raise APIError(502, "invalid_response", "The ticketing service answered without a tickets list.")
+        return tickets
 
     def ticket(self, ticket_id: str) -> dict:
-        return self._request("GET", f"/tickets/{ticket_id}")
+        detail = self._request("GET", f"/tickets/{ticket_id}")
+        if not isinstance(detail.get("ticket_id"), str):
+            raise APIError(502, "invalid_response", "The ticketing service answered without the ticket.")
+        return detail
 
     def assign(self, ticket_id: str) -> dict:
         return self._request("POST", f"/tickets/{ticket_id}/assign")
