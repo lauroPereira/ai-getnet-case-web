@@ -82,3 +82,16 @@ Rotas `/v1/auth/token` e `/v1/auth/revoke` fixadas à mão em `api.py`; `generat
 - **P3-C:** `ticket_solve_confirm` (`app.py:828`) continua marcado na expiração do mesmo operador e na troca de ticket; "Resolver" fica habilitado. Anterior a esta rodada.
 - **P3-D:** nenhum teste fixa a limpeza de `ticket_attempt` (C8 sobrevive), embora o código a faça.
 - **Não comprovado:** navegador e servidor Streamlit reais (só `AppTest`); ticketing real; alguns widgets de comparação, avaliação e KB só pela lista e pela auditoria.
+
+## Tarefa 67, rodada 6 — apto para QA
+
+- **Papel:** Reviewer novo em contexto frio (subagente `reviewer`, sonnet/xhigh), escopo estreito e congelado (P2 só para vazamento entre principais, quebra de contrato ou regressão do já confirmado); leu a tarefa até "Validação"; não leu as passagens do Developer.
+- **Candidato:** `cd7d55d24c58cce5c8a5227d4c2f460e606a37f8`, diff `0bc8d86..cd7d55d` em `app.py` e `tests/test_v070_interface.py`, no worktree `review-web`; HEAD, status e hashes (`app.py` `c75f9044…cafb`, testes `acfc6798…c035`) iguais antes e depois.
+- **Números:** script estrito **92 passed**, Ruff limpo, skills ok, código 0. Sondas: widgets sem `key` 10/10 (base `0bc8d86`: 0/10); widget genérico alterado por A 12/12; operador A → B 113/113; preservação 19/20 (a falha, `sim_role` após sessão real, é idêntica desde `733cc37`); confirmação de "Resolver" e tentativa pendente 28/28; Router padrão por perfil 6/6. Auditoria própria por AST: 44 widgets de entrada, só a URL do backend sem `key`, todas as chaves cobertas pela limpeza. Mutação: 46 mutantes, 42 mortos.
+- **Rodada 5:** P2-B, P3-B, P3-C e P3-D corrigidos; sem regressão do que a rodada 5 confirmou.
+- **P3-1 (regressão das chaves novas):** com chave, o `text_area` do editor da KB (`app.py:1486-1491`) e da "Fonte oficial" (`app.py:1510-1515`) deixa de renovar o valor se o conteúdo mudar no backend com o widget já na tela (sonda: base 2/2, candidato 0/2). O conteúdo só muda por recarga das fontes; sem vazamento entre principais. Correção sugerida para a próxima versão: incluir um prefixo do hash do conteúdo na chave.
+- **P3-2:** a chave do editor da KB perde `document_id` ou a revisão sem que a suíte perceba (F9, F10); falta teste com dois documentos de mesma revisão.
+- **P3-3:** a auditoria por AST não vê widget chamado por alias e aceita qualquer widget com o rótulo da URL do backend.
+- **P3-4:** a confirmação de "Resolver" persiste se o mesmo operador sair do ticket por um caminho que não desenha a caixa e voltar ao mesmo ticket.
+- **Decisão do Supervisor:** os quatro P3 ficam registrados para a próxima versão; nenhum bloqueia o QA.
+- **Não comprovado:** navegador e servidor Streamlit reais (inclusive campos de formulário não enviados no estado do cliente), ticketing e backend reais, outras versões do Streamlit.
