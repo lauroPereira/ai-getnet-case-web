@@ -24,8 +24,8 @@ class SimulatedAPI:
         self._model_catalog = json.loads((FIXTURES / "model_catalog.json").read_text(encoding="utf-8"))
         self._v060 = json.loads((FIXTURES / "v060.json").read_text(encoding="utf-8"))
 
-    def login(self, access_key: str) -> dict:
-        raise APIError(400, "not_required", "Simulated sessions do not require an access key.")
+    def login(self, username: str, password: str) -> dict:
+        raise APIError(400, "not_required", "Simulated sessions do not require a login.")
 
     def logout(self) -> None:
         return None

@@ -7,8 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "openapi-v1.json"
 OUTPUT = ROOT / "src" / "getnet_web" / "generated_api.py"
 ALIASES = {
-    "create_session": "create_session_v1_sessions_post",
-    "revoke_session": "revoke_session_v1_sessions_current_delete",
+    "auth_token": "auth_token_v1_auth_token_post",
+    "auth_revoke": "auth_revoke_v1_auth_revoke_post",
     "model_catalog": "model_catalog_v1_catalog_models_get",
     "list_profiles": "profiles_v1_profiles_get",
     "create_profile": "profiles_create_v1_profiles_post",

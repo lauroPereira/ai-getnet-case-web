@@ -6,25 +6,56 @@
     "version": "0.6.0"
   },
   "paths": {
-    "/v1/sessions": {
+    "/v1/auth/token": {
       "post": {
         "tags": [
-          "v1"
+          "v1",
+          "auth"
         ],
-        "summary": "Create Session",
-        "operationId": "create_session_v1_sessions_post",
+        "summary": "Auth Token",
+        "description": "OAuth 2.0 token endpoint (RFC 6749, form encoded). `password` for the synthetic demo users and\n`client_credentials` for services. The response is `{access_token, token_type, expires_in, scope}`; a failure\nnever says which field was wrong.",
+        "operationId": "auth_token_v1_auth_token_post",
         "requestBody": {
           "content": {
-            "application/json": {
+            "application/x-www-form-urlencoded": {
               "schema": {
-                "$ref": "#/components/schemas/SessionRequest"
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "enum": [
+                      "password",
+                      "client_credentials"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  },
+                  "client_id": {
+                    "type": "string"
+                  },
+                  "client_secret": {
+                    "type": "string",
+                    "format": "password"
+                  },
+                  "scope": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "grant_type"
+                ]
               }
             }
           },
           "required": true
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -32,12 +63,32 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "400": {
+            "description": "Bad Request",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
                 }
               }
             }
@@ -45,16 +96,33 @@
         }
       }
     },
-    "/v1/sessions/current": {
-      "delete": {
+    "/v1/auth/revoke": {
+      "post": {
         "tags": [
-          "v1"
+          "v1",
+          "auth"
         ],
-        "summary": "Revoke Session",
-        "operationId": "revoke_session_v1_sessions_current_delete",
+        "summary": "Auth Revoke",
+        "description": "Revokes the presented token (its `jti`) until it expires (RFC 7009 style: `200` with an empty body).",
+        "operationId": "auth_revoke_v1_auth_revoke_post",
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1230,6 +1298,426 @@
         }
       }
     },
+    "/v1/handoffs": {
+      "get": {
+        "tags": [
+          "v1",
+          "handoffs"
+        ],
+        "summary": "Handoffs List",
+        "description": "Operator queue, newest first; `state` = open, claimed, answered, rejected or closed.",
+        "operationId": "handoffs_list_v1_handoffs_get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handoffs/{case_id}": {
+      "get": {
+        "tags": [
+          "v1",
+          "handoffs"
+        ],
+        "summary": "Handoffs Show",
+        "description": "Summary, pending question, draft, masked conversation, events and deliveries of one case.",
+        "operationId": "handoffs_show_v1_handoffs__case_id__get",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handoffs/{case_id}/claim": {
+      "post": {
+        "tags": [
+          "v1",
+          "handoffs"
+        ],
+        "summary": "Handoffs Claim",
+        "description": "Claims the case for the operator of the token (D9). Claiming one's own case again is idempotent.",
+        "operationId": "handoffs_claim_v1_handoffs__case_id__claim_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handoffs/{case_id}/actions": {
+      "post": {
+        "tags": [
+          "v1",
+          "handoffs"
+        ],
+        "summary": "Handoffs Act",
+        "description": "`approve`, `reply` or `reject` (D9, D10, D14). The same `idempotency_key` returns the stored record with\n`replayed: true`; a case already resumed by another action is `409 already_resumed`.",
+        "operationId": "handoffs_act_v1_handoffs__case_id__actions_post",
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        }
+      }
+    },
+    "/v1/integrations/ticketing/events": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Ticketing Events",
+        "description": "Signed ticketing event (`ticket.assigned`, `ticket.action`, `ticket.solved`). Answer:\n`200 {\"status\": \"accepted\"|\"replayed\", \"case_state\", \"queue_state\"}`.",
+        "operationId": "ticketing_events_v1_integrations_ticketing_events_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionBearer": []
+          }
+        ]
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -1248,6 +1736,49 @@
                   },
                   "type": "object",
                   "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/jwks.json": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Jwks",
+        "description": "Public signing keys of the assistant's token issuer (RS256, `kid` = RFC 7638 thumbprint).",
+        "operationId": "jwks__well_known_jwks_json_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/openid-configuration": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Openid Configuration",
+        "operationId": "openid_configuration__well_known_openid_configuration_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Openid Configuration  Well Known Openid Configuration Get"
                 }
               }
             }
@@ -1280,6 +1811,7 @@
           "assistant"
         ],
         "summary": "Messages",
+        "description": "Sends one merchant message. A bearer access token is required: the merchant comes from the\ntoken's principal, never from the payload (`user_id` is optional and, when present, must match it, otherwise\n`403 identity_mismatch`). Operator, service and admin tokens receive `403`.\n\nTwo calls: get a token (OAuth 2.0 password grant), then send the message with it.\n\n```bash\nTOKEN=$(curl -s localhost:8000/v1/auth/token -d grant_type=password -d username=cliente1988   -d password=cliente1988-fictitious | python -c 'import json,sys; print(json.load(sys.stdin)[\"access_token\"])')\ncurl -s localhost:8000/messages -H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/json'   -d '{\"message\": \"When will the money from yesterday sales be deposited?\"}'\n```\n\nIn this page: get the token with `POST /v1/auth/token`, press **Authorize** and paste the `access_token`. The\npasswords of `.env.example` are fictitious examples; replace them before exposing the API.",
         "operationId": "messages_messages_post",
         "requestBody": {
           "content": {
@@ -1298,6 +1830,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1322,6 +1874,16 @@
               }
             }
           },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -1332,87 +1894,12 @@
               }
             }
           }
-        }
-      }
-    },
-    "/traces/{request_id}": {
-      "get": {
-        "tags": [
-          "demo"
-        ],
-        "summary": "Trace",
-        "operationId": "trace_traces__request_id__get",
-        "parameters": [
+        },
+        "security": [
           {
-            "name": "request_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Request Id"
-            }
+            "SessionBearer": []
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/conversations/{conversation_id}": {
-      "get": {
-        "tags": [
-          "demo"
-        ],
-        "summary": "Conversation",
-        "operationId": "conversation_conversations__conversation_id__get",
-        "parameters": [
-          {
-            "name": "conversation_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Conversation Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
+        ]
       }
     }
   },
@@ -1683,12 +2170,8 @@
         "properties": {
           "protocol": {
             "type": "string",
-            "title": "Protocol"
-          },
-          "simulated": {
-            "type": "boolean",
-            "title": "Simulated",
-            "default": true
+            "title": "Protocol",
+            "description": "Handoff protocol, HO-AAAAMMDD-XXXXXX."
           },
           "reason": {
             "type": "string",
@@ -1701,6 +2184,51 @@
           "reason"
         ],
         "title": "Handoff"
+      },
+      "HandoffActionRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reply",
+              "reject"
+            ],
+            "title": "Action"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text",
+            "description": "Reply text (reply) or instruction to the agent (reject)."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{8,80}$",
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "idempotency_key"
+        ],
+        "title": "HandoffActionRequest",
+        "examples": [
+          {
+            "action": "reply",
+            "idempotency_key": "ui-7f3a9c21",
+            "text": "Your payout was sent today."
+          }
+        ]
       },
       "KBBuildRequest": {
         "properties": {
@@ -1826,10 +2354,17 @@
             "description": "Merchant message, in Portuguese or English."
           },
           "user_id": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_\\-.]{1,64}$",
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_\\-.]{1,64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "User Id",
-            "description": "Synthetic merchant identifier for the demo scenario. It does not prove identity."
+            "description": "Optional. The merchant comes from the session; when present it must be the session's merchant (otherwise 403 identity_mismatch). It never selects the merchant."
           },
           "conversation_id": {
             "anyOf": [
@@ -1847,50 +2382,39 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "message",
-          "user_id"
+          "message"
         ],
         "title": "MessageRequest",
         "examples": [
           {
-            "message": "What's the difference between the Get Clássica and the Get Smart?",
-            "user_id": "cliente1988"
+            "message": "What's the difference between the Get Clássica and the Get Smart?"
           },
           {
-            "message": "What's the weather forecast in Porto Alegre tomorrow?",
-            "user_id": "cliente1988"
+            "message": "What's the weather forecast in Porto Alegre tomorrow?"
           },
           {
-            "message": "When will the money from yesterday's sales be deposited?",
-            "user_id": "cliente1988"
+            "message": "When will the money from yesterday's sales be deposited?"
           },
           {
-            "message": "Do I need a bank account to receive my sales via Pix?",
-            "user_id": "cliente1988"
+            "message": "Do I need a bank account to receive my sales via Pix?"
           },
           {
-            "message": "My card machine won't connect to the internet, what should I do?",
-            "user_id": "cliente1988"
+            "message": "My card machine won't connect to the internet, what should I do?"
           },
           {
-            "message": "How does receivables advance (antecipação) work with Getnet?",
-            "user_id": "cliente1988"
+            "message": "How does receivables advance (antecipação) work with Getnet?"
           },
           {
-            "message": "What's the euro exchange rate today?",
-            "user_id": "cliente1988"
+            "message": "What's the euro exchange rate today?"
           },
           {
-            "message": "My card machine is showing a transaction decline error.",
-            "user_id": "cliente1988"
+            "message": "My card machine is showing a transaction decline error."
           },
           {
-            "message": "How many installments can I split a sale into with the crediário?",
-            "user_id": "cliente1988"
+            "message": "How many installments can I split a sale into with the crediário?"
           },
           {
-            "message": "Can I sell through WhatsApp using the Payment Link?",
-            "user_id": "cliente1988"
+            "message": "Can I sell through WhatsApp using the Payment Link?"
           }
         ]
       },
@@ -1911,18 +2435,36 @@
             "title": "Status"
           },
           "route": {
-            "type": "string",
-            "enum": [
-              "knowledge",
-              "support",
-              "knowledge_and_support",
-              "general_web",
-              "clarify",
-              "human_handoff",
-              "out_of_scope",
-              "acknowledgement"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "knowledge",
+                  "support",
+                  "knowledge_and_support",
+                  "general_web",
+                  "clarify",
+                  "human_handoff",
+                  "out_of_scope",
+                  "acknowledgement"
+                ]
+              },
+              {
+                "type": "string",
+                "const": "human_reply"
+              }
             ],
             "title": "Route"
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "operator"
+            ],
+            "title": "Via",
+            "description": "operator: the reply was written or approved by a human support agent.",
+            "default": "agent"
           },
           "agents": {
             "items": {
@@ -2115,6 +2657,32 @@
         ],
         "title": "ModelParameterSpec"
       },
+      "OAuthError": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "invalid_request",
+              "invalid_client",
+              "invalid_grant",
+              "unsupported_grant_type",
+              "rate_limited"
+            ],
+            "title": "Error"
+          },
+          "error_description": {
+            "type": "string",
+            "title": "Error Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "error_description"
+        ],
+        "title": "OAuthError",
+        "description": "RFC 6749 §5.2 error body, used only by the token endpoint."
+      },
       "ProfileCreateRequest": {
         "properties": {
           "name": {
@@ -2211,22 +2779,6 @@
           "state"
         ],
         "title": "Resolution"
-      },
-      "SessionRequest": {
-        "properties": {
-          "access_key": {
-            "type": "string",
-            "format": "password",
-            "title": "Access Key",
-            "writeOnly": true
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "access_key"
-        ],
-        "title": "SessionRequest"
       },
       "Source": {
         "properties": {
@@ -2389,7 +2941,9 @@
     "securitySchemes": {
       "SessionBearer": {
         "type": "http",
-        "scheme": "bearer"
+        "description": "Access token from POST /v1/auth/token (RS256, typ at+jwt).",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     }
   }
