@@ -72,9 +72,14 @@ Developer, rodada 1 (2026-11-03), branch `codex/v0.7.0-identidade-hitl` sobre `3
   - Fila, ticket, ação, rascunho e confirmações da tela de ticketing, e as demais escolhas e confirmações das telas, saem da sessão no logout e quando outro `sub` entra; o mesmo operador depois de expirar mantém o rascunho.
   - Testes novos para `sub` ausente nos dois tokens, `results_run_choice`, vários turnos de operador antes da pergunta e as fronteiras da recuperação; auditoria das chaves de widget de `app.py`.
   - Script estrito: código 0, 83 testes aprovados; detalhes na [passagem](../evidence/v070-developer-web.md).
+- Rodada 6 (resíduo da revisão da rodada 5):
+  - Todo widget de entrada tem `key` e entra na limpeza: o rádio "Router do atendimento" (uma chave por perfil, para o padrão continuar seguindo o perfil), o nome e a permissão do novo perfil, o rascunho de perfil escolhido e os editores da base de conhecimento (um por documento e revisão). Ficam de fora, de propósito, a URL do backend, `mode` e `sim_role`.
+  - A confirmação de "Resolver" é renovada ao trocar de ticket e em sessão nova; a tentativa pendente do ticketing (texto e chave) tem teste de que some no logout e no login de outro principal.
+  - A auditoria por AST exige `key` em todo widget de entrada.
+  - Script estrito: código 0, 92 testes aprovados; detalhes na [passagem](../evidence/v070-developer-web.md).
 
 ## Status
 
 ```text
-Rodadas 1 a 5 implementadas pelo Developer; a rodada 5 fecha o resíduo da revisão da rodada 4 (estado da tela de ticketing entre operadores). Aguarda nova revisão.
+Rodadas 1 a 6 implementadas pelo Developer; a rodada 6 fecha o resíduo da revisão da rodada 5 (widgets sem chave e confirmação de Resolver). Aguarda revisão estreita.
 ```

@@ -590,12 +590,19 @@ def render_comparison(result):
 
 
 SESSION_KEYS = ("api_token", "api_role", "api_principal", "api_token_exp")
-TICKET_STATE_KEYS = ("ticket_attempt", "ticket_notice", "ticket_confirm_context")
+TICKET_STATE_KEYS = (
+    "ticket_attempt",
+    "ticket_notice",
+    "ticket_confirm_context",
+    "ticket_solve_confirm_context",
+)
 # Per-user state beyond the token: the conversation, its runs and the analyses started from them. It belongs to
 # `conversation_owner` (the `sub` of the token that created it) and must never reach another principal. Besides the
 # defaults below, these keys hold what the user typed, picked, confirmed or estimated; they are dropped with the
-# conversation. Streamlit keeps the state of keyed widgets across the login screen (the script stops before them), so
-# every keyed value widget of this file is listed here or in the audit test's allowlist (`tests/test_v070_interface.py`).
+# conversation. Streamlit keeps the state of input widgets across the login screen (the script stops before them), and
+# one without a `key` gets an automatic id that survives too: so every input widget of this file has a key listed here
+# (or one built from a prefix covered by `is_user_scratch`), except the few left by design in the audit test
+# (`tests/test_v070_interface.py`): the backend URL, the mode and the simulated role.
 USER_SCRATCH_KEYS = (
     # Atendimento and Resultados
     "message_input",
@@ -615,6 +622,9 @@ USER_SCRATCH_KEYS = (
     "cmp_point_choice",
     "cmp_cell_choice",
     # Administração
+    "profile_draft_name",
+    "profile_allow_demo",
+    "profile_draft_choice",
     "kb_document_choice",
     "kb_candidate_choice",
     "kb_build_max_cost",
@@ -639,9 +649,15 @@ USER_SCRATCH_KEYS = (
 
 
 def is_user_scratch(key):
-    """Keyed widgets whose key is built at run time: the ticket texts and the admin profile forms."""
-    return key in USER_SCRATCH_KEYS or key.startswith("ticket_text_") or (
-        key.startswith(("create_", "update_")) and key.endswith(("_model", "_output_enabled", "_output_tokens"))
+    """Widget keys built at run time: the Router choice of each profile, the ticket texts, the knowledge-base editor
+    of each document and the admin profile forms (`create_*`/`update_*`, built by `render_agent_configuration`)."""
+    return (
+        key in USER_SCRATCH_KEYS
+        or key.startswith(("router_choice_", "ticket_text_", "kb_draft_text_", "kb_source_text_"))
+        or (
+            key.startswith(("create_", "update_"))
+            and key.endswith(("_model", "_output_enabled", "_output_tokens"))
+        )
     )
 
 
@@ -825,6 +841,7 @@ def render_ticket_actions(client, detail):
         st.rerun()
 
     st.markdown("**Finalização**")
+    reset_confirmation_context("ticket_solve_confirm_context", ticket_id, "ticket_solve_confirm")
     solve_confirmed = st.checkbox("Confirmo que o atendimento terminou", key="ticket_solve_confirm")
     if st.button("Resolver", key="ticket_solve", disabled=not solve_confirmed):
         try:
@@ -885,6 +902,7 @@ for key, default in {
     "ticket_attempt": None,
     "ticket_notice": None,
     "ticket_confirm_context": None,
+    "ticket_solve_confirm_context": None,
     **conversation_defaults(),
 }.items():
     if key not in st.session_state:
@@ -1013,6 +1031,7 @@ with attendance_tab:
         index=["llm", "jev"].index(mechanism_default),
         format_func=lambda value: "LLM" if value == "llm" else "JEV",
         horizontal=True,
+        key=f"router_choice_{profile_id}",  # one per profile, so the default still follows the profile
     )
     scenarios, scenarios_error = load_scenarios(api)
     if scenarios_error:
@@ -1380,9 +1399,9 @@ if role == "admin":
                 st.error(f"Catálogo de modelos indisponível: {explain_any(exc)}")
                 catalog = []
             with st.form("admin_profile_form"):
-                draft_name = st.text_input("Nome do novo perfil", value="Ajustado")
+                draft_name = st.text_input("Nome do novo perfil", value="Ajustado", key="profile_draft_name")
                 new_agents = render_agent_configuration(profile["agents"], catalog, f"create_{profile_id}")
-                allow_demo = st.checkbox("Permitir seleção pela sessão demo", value=True)
+                allow_demo = st.checkbox("Permitir seleção pela sessão demo", value=True, key="profile_allow_demo")
                 create_action = st.form_submit_button("Criar rascunho")
             if create_action:
                 try:
@@ -1394,7 +1413,12 @@ if role == "admin":
                     st.error(f"Não foi possível criar o perfil: {exc}")
             drafts = [item for item in profile_items if item.get("state") == "draft"]
             if drafts:
-                draft = st.selectbox("Rascunho para editar ou publicar", drafts, format_func=lambda item: item["name"])
+                draft = st.selectbox(
+                    "Rascunho para editar ou publicar",
+                    drafts,
+                    format_func=lambda item: item["name"],
+                    key="profile_draft_choice",
+                )
                 with st.form("update_profile_form"):
                     updated_agents = render_agent_configuration(
                         draft["agents"], catalog, f"update_{draft['profile_id']}_{draft['version']}"
@@ -1463,6 +1487,8 @@ if role == "admin":
                                     "Conteúdo fictício",
                                     value=current_draft.get("content", kb_detail["content"]),
                                     height=260,
+                                    # one per document and draft revision: a saved draft or another document shows its own text
+                                    key=f"kb_draft_text_{document['document_id']}_{draft_rev}",
                                 )
                                 save_draft = st.form_submit_button("Salvar rascunho", disabled=role != "admin")
                             if save_draft:
@@ -1482,7 +1508,11 @@ if role == "admin":
                                     st.error(f"Diff indisponível: {explain_any(exc)}")
                         else:
                             st.text_area(
-                                "Fonte oficial · somente leitura", value=kb_detail["content"], height=260, disabled=True
+                                "Fonte oficial · somente leitura",
+                                value=kb_detail["content"],
+                                height=260,
+                                disabled=True,
+                                key=f"kb_source_text_{document['document_id']}",
                             )
 
                     revisions = {

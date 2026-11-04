@@ -972,26 +972,227 @@ def test_admin_form_choices_do_not_reach_the_next_admin(wire):
     assert not [key for key in app.session_state if key.startswith(("create_", "update_"))]
 
 
-def test_every_keyed_value_widget_is_dropped_with_the_conversation():
-    """Streamlit keeps the state of keyed widgets across the login screen, so a widget added without being listed in
-    USER_SCRATCH_KEYS would leak from one user to the next. Keys built at run time are covered by the tests above."""
+# --- round 6: widgets without a key, the solve confirmation and the pending attempt ------------------------------------
+
+
+@pytest.mark.parametrize("how", ["logout", "expiry"])
+def test_another_merchant_does_not_inherit_the_router_choice(wire, how):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=["fixture", "fixture"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    assert app.radio(key="router_choice_reference").value == "llm"
+    app.radio(key="router_choice_reference").set_value("jev").run()
+    send(app, "Pergunta da lojista A")
+    assert chat.payloads[-1]["router_mechanism"] == "jev"
+    leave(app, how)
+    chat.sub = "merchant:cliente2000"
+    login(app, "cliente2000")
+    assert app.radio(key="router_choice_reference").value == "llm"  # the default, not the Router A picked
+    send(app, "Pergunta de B")
+    assert chat.payloads[-1]["router_mechanism"] == "llm"
+
+
+def test_the_router_default_still_follows_the_profile(wire):
+    wire(FakeAssistant("merchant", "merchant:cliente1988"), FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    app.selectbox(key="profile").select("Híbrido · v1").run()
+    assert app.radio(key="router_choice_hybrid").value == "jev"
+    app.radio(key="router_choice_hybrid").set_value("llm").run()
+    app.selectbox(key="profile").select("Referência · v1").run()
+    assert app.radio(key="router_choice_reference").value == "llm"
+    app.selectbox(key="profile").select("Híbrido · v1").run()
+    assert app.radio(key="router_choice_hybrid").value == "jev"  # as before the key: each profile starts at its default
+
+
+class AdminChat(FakeAssistant):
+    """An admin session: two profile drafts and one editable knowledge-base document with a draft."""
+
+    def profiles(self):
+        agents = SimulatedAPI().profiles()[0]["agents"]
+        drafts = [
+            {"profile_id": f"draft{number}", "name": name, "version": 1, "state": "draft", "agents": agents}
+            for number, name in ((1, "Rascunho um"), (2, "Rascunho dois"))
+        ]
+        return SimulatedAPI().profiles() + drafts
+
+    def kb_documents(self):
+        return [
+            {"document_id": "demo:guide", "title": "Guia", "source_kind": "simulated_internal", "editable": True,
+             "draft_revision": 2},
+            {"document_id": "demo:faq", "title": "Perguntas", "source_kind": "simulated_internal", "editable": True,
+             "draft_revision": None},
+        ]
+
+    def kb_versions(self):
+        return {"active_version_id": "kb_initial", "previous_version_id": None, "versions": []}
+
+    def kb_document(self, document_id):
+        guide = document_id == "demo:guide"
+        return {"document_id": document_id, "source_kind": "simulated_internal",
+                "content": "Conteúdo publicado do guia" if guide else "Conteúdo publicado das perguntas",
+                "content_hash": "a" * 64,
+                "draft": {"revision": 2, "content": "Rascunho sintético da base"} if guide else None}
+
+    def kb_diff(self, document_id):
+        return {"diff": "- antes\n+ depois"}
+
+    def kb_save_draft(self, document_id, payload):
+        return {"revision": 3}
+
+
+def kb_editor(app):
+    return next(item for item in app.text_area if item.label == "Conteúdo fictício")
+
+
+def submit(app, label):
+    """The profile and knowledge-base fields live in forms: what was typed counts only after the submit."""
+    next(button for button in app.button if button.label == label).click().run()
+    assert not app.exception
+
+
+@pytest.mark.parametrize("how", ["logout", "expiry"])
+def test_another_admin_does_not_inherit_the_profile_and_knowledge_base_forms(wire, how):
+    chat = AdminChat("admin", "admin:default")
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "admin")
+    assert kb_editor(app).value == "Rascunho sintético da base"
+    app.text_input(key="profile_draft_name").set_value("Perfil secreto de A")
+    app.checkbox(key="profile_allow_demo").uncheck()
+    submit(app, "Criar rascunho")
+    app.selectbox(key="profile_draft_choice").select("Rascunho dois").run()
+    kb_editor(app).set_value("Texto secreto da base, de A")
+    submit(app, "Salvar rascunho")
+    assert app.text_input(key="profile_draft_name").value == "Perfil secreto de A"
+    assert app.checkbox(key="profile_allow_demo").value is False
+    assert app.selectbox(key="profile_draft_choice").index == 1
+    assert kb_editor(app).value == "Texto secreto da base, de A"
+    leave(app, how)
+    chat.sub = "admin:other"
+    login(app, "admin")
+    assert app.text_input(key="profile_draft_name").value == "Ajustado"
+    assert app.checkbox(key="profile_allow_demo").value is True
+    assert app.selectbox(key="profile_draft_choice").index == 0
+    assert kb_editor(app).value == "Rascunho sintético da base"
+    assert "secreto" not in repr(app.session_state) and not app.exception
+
+
+def test_another_document_shows_its_own_text_in_the_editor(wire):
+    wire(AdminChat("admin", "admin:default"), FakeTicketing())
+    app = login(real_app(), "admin")
+    kb_editor(app).set_value("Meu texto")
+    submit(app, "Salvar rascunho")
+    assert kb_editor(app).value == "Meu texto"  # the same document and revision: the typed text stays
+    app.selectbox(key="kb_document_choice").select("Perguntas · simulated_internal").run()
+    assert kb_editor(app).value == "Conteúdo publicado das perguntas" and not app.exception
+
+
+def test_solve_confirmation_is_renewed_on_another_ticket_and_in_a_new_session(wire):
+    ticketing = open_tickets()
+    wire(FakeAssistant(), ticketing)
+    app = login(real_app())
+    app.radio(key="ticket_status").set_value("open").run()
+    assert app.button(key="ticket_solve").disabled
+    app.checkbox(key="ticket_solve_confirm").check().run()
+    assert not app.button(key="ticket_solve").disabled
+    choice = app.selectbox(key="ticket_choice")
+    choice.select(next(option for option in choice.options if "00000B" in option)).run()
+    assert not app.checkbox(key="ticket_solve_confirm").value and app.button(key="ticket_solve").disabled
+    app.checkbox(key="ticket_solve_confirm").check().run()
+    leave(app, "expiry")
+    login(app)  # the same operator, a new session
+    assert "00000B" in app.selectbox(key="ticket_choice").value
+    assert not app.checkbox(key="ticket_solve_confirm").value and app.button(key="ticket_solve").disabled
+    assert ticketing.posts == [] and not app.exception
+
+
+@pytest.mark.parametrize("how", ["logout", "expiry"])
+def test_a_pending_attempt_does_not_reach_another_principal(wire, how):
+    ticketing = open_tickets()
+    ticketing.fail["act"] = [httpx.ConnectError("ticketing down")]
+    assistant, _ = wire(FakeAssistant(), ticketing)
+
+    def reply(app):
+        app.radio(key="ticket_status").set_value("open").run()
+        choice = app.selectbox(key="ticket_choice")
+        choice.select(next(option for option in choice.options if "00000B" in option)).run()
+        app.radio(key="ticket_action").set_value("reply").run()
+        app.text_area(key="ticket_text_reply").set_value("Resposta sintética.").run()
+        app.checkbox(key="ticket_confirm").check().run()
+        app.button(key="ticket_send").click().run()
+        assert not app.exception
+
+    app = login(real_app())
+    reply(app)  # the transport fails: the text and the key are kept for the retry
+    attempt = app.session_state["ticket_attempt"]
+    assert attempt["signature"] == ["tkt_00000b", "reply", "Resposta sintética."]
+    first_key = ticketing.posts[-1][4]
+    assert attempt["key"] == first_key
+    leave(app, how)
+    assert app.session_state["ticket_attempt"] is None
+    assistant.sub = "operator:op_bia"
+    login(app, "op_bia")
+    assert app.session_state["ticket_attempt"] is None
+    reply(app)  # the very same action by the next operator is a new action, with a new key
+    assert ticketing.posts[-1][:4] == ("act", "tkt_00000b", "reply", "Resposta sintética.")
+    assert ticketing.posts[-1][4] != first_key and len(ticketing.posts) == 2
+
+
+# --- the audit of the widgets -----------------------------------------------------------------------------------------
+
+INPUT_WIDGETS = {
+    "text_input", "text_area", "number_input", "selectbox", "radio", "checkbox", "multiselect", "slider",
+    "select_slider", "toggle", "date_input", "time_input", "color_picker", "file_uploader", "camera_input",
+    "audio_input", "chat_input", "segmented_control", "pills", "feedback", "data_editor",
+}
+NO_KEY_BY_DESIGN = {"URL da API backend"}  # the backend address is the browser's choice, not the user's
+KEPT_BY_DESIGN = {"mode", "sim_role", "login_username", "login_password"}  # the sidebar; the login keys leave on submit
+
+
+def test_every_input_widget_has_a_key_that_is_dropped_with_the_conversation():
+    """Streamlit keeps the state of input widgets across the login screen, and one without a key has an automatic id
+    that survives too. So every input widget of app.py needs a constant (or f-string) key that `is_user_scratch`
+    covers, with the few exceptions above. Buttons are momentary and hold no state. The real `is_user_scratch` is
+    compiled from app.py, so the audit follows the app."""
     tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
-    widgets = {"text_input", "text_area", "number_input", "selectbox", "radio", "checkbox", "multiselect"}
-    keyed = {
-        keyword.value.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in widgets
-        for keyword in node.keywords
-        if keyword.arg == "key" and isinstance(keyword.value, ast.Constant)
-    }
-    scratch = {
-        node.value
+    wanted = [
+        statement
         for statement in tree.body
-        if isinstance(statement, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "USER_SCRATCH_KEYS" for target in statement.targets)
-        for node in ast.walk(statement.value)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
-    not_per_user = {"mode", "sim_role", "login_username", "login_password"}  # the sidebar; the login keys leave on submit
-    assert len(keyed) > 25 and len(scratch) > 25  # the audit does see the widgets and the list
-    assert keyed - not_per_user - scratch == set()
+        if (isinstance(statement, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id in {"KB_CONFIRMATION_CONTEXTS", "USER_SCRATCH_KEYS"}
+                    for target in statement.targets))
+        or (isinstance(statement, ast.FunctionDef) and statement.name == "is_user_scratch")
+    ]
+    namespace: dict = {}
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), "app.py", "exec"), namespace)  # noqa: S102
+    is_user_scratch = namespace["is_user_scratch"]
+
+    problems, seen = [], 0
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in INPUT_WIDGETS):
+            continue
+        seen += 1
+        where = f"line {node.lineno}: {node.func.attr}({ast.unparse(node.args[0]) if node.args else ''})"
+        if any(keyword.arg is None for keyword in node.keywords):
+            problems.append(f"{where} hides its key in **kwargs")
+            continue
+        keys = [keyword.value for keyword in node.keywords if keyword.arg == "key"]
+        if not keys:
+            first = node.args[0] if node.args else None
+            if not (isinstance(first, ast.Constant) and first.value in NO_KEY_BY_DESIGN):
+                problems.append(f"{where} has no key")
+            continue
+        key = keys[0]
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            covered = key.value in KEPT_BY_DESIGN or is_user_scratch(key.value)
+        elif isinstance(key, ast.JoinedStr):  # an f-string counts by its constant prefix (and suffix)
+            first, last = key.values[0], key.values[-1]
+            # render_agent_configuration builds f"{key_prefix}_..." and its callers pass create_* or update_*
+            prefix = first.value if isinstance(first, ast.Constant) else "create_"
+            suffix = last.value if isinstance(last, ast.Constant) else ""
+            covered = is_user_scratch(f"{prefix}x{suffix}")
+        else:
+            covered = False
+        if not covered:
+            problems.append(f"{where} has a key that is not covered by is_user_scratch")
+    assert seen > 40  # the audit does see the widgets
+    assert problems == []

@@ -281,3 +281,60 @@ Em `tests/test_v070_interface.py`:
 ### Próxima ação
 
 Nova revisão independente da rodada 5; QA depois, com navegador, backend e ticketing reais.
+
+## Tarefa 67, rodada 6
+
+- Papel e responsável: Developer do Time B, resíduo do [parecer da rodada 5](v070-reviewer-web.md) (commit `b162d73`; o candidato revisado foi `0bc8d86`).
+- Escopo: `app.py`, `tests/test_v070_interface.py`, a tarefa 67 e esta passagem. Backend não tocado.
+- Base e versão final: base `b162d73`; versão final é o commit desta rodada. Independência: não-independente (relato do autor). Identidade do Git conferida antes do commit (`lauroPereira <lauro.s.pereira@gmail.com>`).
+
+### P2-B: widgets sem `key` passavam ao próximo principal
+
+- **Causa:** um widget sem `key` tem id automático (rótulo e parâmetros) e o estado dele também sobrevive à tela de login, que termina em `st.stop()`. A limpeza da rodada 5 só alcançava chaves.
+- **Widgets que ganharam `key`** (levantados por AST em `app.py`; sobrou sem chave só a URL do backend):
+  - Rádio "Router do atendimento": `router_choice_{profile_id}`. A chave é por perfil de propósito: o padrão do rádio depende do perfil (JEV no híbrido, LLM nos demais), e uma chave única o fixaria na primeira escolha. Com uma chave por perfil, o comportamento anterior continua: cada perfil começa no seu padrão, inclusive ao voltar a ele (teste `test_the_router_default_still_follows_the_profile`).
+  - "Nome do novo perfil" (`profile_draft_name`), "Permitir seleção pela sessão demo" (`profile_allow_demo`) e "Rascunho para editar ou publicar" (`profile_draft_choice`).
+  - "Conteúdo fictício" da base: `kb_draft_text_{documento}_{revisão do rascunho}`. Uma chave fixa faz o editor mostrar o texto do documento anterior ao trocar de documento (o teste `test_another_document_shows_its_own_text_in_the_editor` falha com ela); um rascunho salvo, de revisão nova, é um editor novo com o texto salvo.
+  - "Fonte oficial · somente leitura" (desabilitado, sem entrada do usuário): `kb_source_text_{documento}`, só para a auditoria poder exigir chave em tudo.
+- **Limpeza:** `USER_SCRATCH_KEYS` ganhou as três chaves fixas e `is_user_scratch` ganhou os prefixos `router_choice_`, `kb_draft_text_` e `kb_source_text_`.
+- **Fica de fora, de propósito:** a URL do backend (escolha do navegador), `mode` e `sim_role`.
+- **Testes:**
+  - `test_another_merchant_does_not_inherit_the_router_choice` (logout e expiração): A escolhe JEV e envia; B entra e envia com o padrão LLM.
+  - `test_another_admin_does_not_inherit_the_profile_and_knowledge_base_forms` (logout e expiração): A preenche e envia os dois formulários, escolhe o segundo rascunho e sai; B vê nome "Ajustado", permissão marcada, primeiro rascunho e o texto da base do servidor, e nenhum "secreto" no `session_state`.
+
+### P3-B: auditoria por AST
+
+`test_every_input_widget_has_a_key_that_is_dropped_with_the_conversation` substitui a da rodada 5. Ele lê `app.py` e compila a `is_user_scratch` real a partir dele, de modo que a auditoria acompanha o app.
+
+- Exige `key` em toda chamada de widget de entrada: `text_input`, `text_area`, `number_input`, `selectbox`, `radio`, `checkbox`, `multiselect`, `slider`, `select_slider`, `toggle`, `date_input`, `time_input`, `color_picker`, `file_uploader`, `camera_input`, `audio_input`, `chat_input`, `segmented_control`, `pills`, `feedback` e `data_editor`. Botões não entram: são momentâneos e não guardam estado.
+- Aceita chave constante coberta por `is_user_scratch` ou pela lista de exceções por desenho (`mode`, `sim_role`, `login_username`, `login_password`), e f-string pelo prefixo constante, que precisa estar coberto. As chaves de `render_agent_configuration` (`{key_prefix}_{agente}_...`) são avaliadas como `create_...`.
+- A única chamada sem `key` aceita é a da URL do backend, identificada pelo rótulo. `**kwargs` e chave em variável reprovam, embora o app não tenha nenhum caso.
+- Conferido o app inteiro: mais de 40 chamadas vistas, nenhum problema.
+
+### P3-C: confirmação de "Resolver"
+
+`ticket_solve_confirm` agora tem um contexto, como as outras confirmações: `reset_confirmation_context("ticket_solve_confirm_context", ticket_id, "ticket_solve_confirm")`. Trocar de ticket desmarca a caixa, e `ticket_solve_confirm_context` entrou em `TICKET_STATE_KEYS`, que `end_session` zera, então uma sessão nova do mesmo operador também a desmarca. "Resolver" volta desabilitado nos dois casos. Teste: `test_solve_confirmation_is_renewed_on_another_ticket_and_in_a_new_session` (sem nenhum POST).
+
+### P3-D: tentativa pendente
+
+`test_a_pending_attempt_does_not_reach_another_principal` (logout e expiração): a falha de transporte deixa `ticket_attempt` com o texto e a chave; no logout ou na expiração ele some, no login do outro operador continua vazio, e a mesma ação (mesmo ticket, ação e texto) sai com chave nova.
+
+### Evidência
+
+- **Comando:** `PYTHONPATH=src PYTEST_ADDOPTS="-p no:cacheprovider --basetemp .pytest_cache/t67-r6-dev-20261103-220821" .venv-v040/Scripts/python.exe tools/scripts/lint_and_tests.py --strict` → código 0, **92 testes aprovados** em 101,52 s (83 − 1 auditoria substituída + 10 novos), Ruff "All checks passed!", estrutura e skills válidas.
+- **Mutação em `app.py`** (restaurado byte a byte depois): 11 mutantes, 11 mortos, cada um por teste nomeado.
+  - Limpeza: prefixo `router_choice_` fora; `profile_draft_name`, `profile_allow_demo` e `profile_draft_choice` fora da lista; prefixo `kb_draft_text_` fora; chave constante no editor da base (pego também pelo teste do documento); rádio sem `key`.
+  - Auditoria: prefixo `kb_source_text_` fora.
+  - Confirmação de "Resolver": sem o reinício por ticket; contexto fora de `TICKET_STATE_KEYS` (expiração).
+  - P3-D: `ticket_attempt` fora de `TICKET_STATE_KEYS`.
+- Nenhuma chamada paga, nenhum serviço real, sem push.
+
+### Limitações
+
+- Navegador real, backend real e ticketing real continuam sem exercício (QA); a limpeza foi demonstrada com `AppTest`.
+- A auditoria não vê widgets criados por outro meio que uma chamada `st.<widget>(...)` (por exemplo uma função auxiliar que receba o objeto `st`), nem chaves em variável; ela reprova as que vê, mas o app não tem nenhuma.
+- O texto somente leitura da base ganhou chave só para a auditoria; não guarda entrada do usuário.
+
+### Próxima ação
+
+Revisão estreita da rodada 6, só nos pontos P2-B e P3-B a P3-D; QA depois, com navegador, backend e ticketing reais.
