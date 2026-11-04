@@ -59,3 +59,14 @@ Rotas `/v1/auth/token` e `/v1/auth/revoke` fixadas à mão em `api.py`; `generat
 - **P3-3:** hash do snapshot depende de `core.autocrlf`; passagens devem citar o do blob.
 - **P3-4:** desvio por rota sem teste isolado (M11); só registro.
 - **Não comprovado:** navegador real e serviço de ticketing real (ficam para o QA); demais rotas `/v1` sob D20/D21; texto do `Retry-After` no `429`.
+
+## Tarefa 67, rodada 4 — correções necessárias (um P2 residual)
+
+- **Papel:** Reviewer novo em contexto frio (subagente `reviewer`, sonnet/xhigh); leu a tarefa até "Validação", o contrato e o parecer da rodada 3; não leu as passagens do Developer.
+- **Candidato:** `9f6a894`, diff `733cc37..9f6a894` em `app.py`, `tests/test_v070_interface.py` e `README.md`, no worktree `review-web`; HEAD e árvore iguais antes e depois.
+- **Números:** script estrito **73 passed**, Ruff limpo, código 0. Mutação: 26 mutantes nas correções, 16 mortos.
+- **Rodada 3:** P2-1 corrigido para conversa e campos do lojista (22/22 nas sondas de logout, revoke falho, expiração com outro `sub` ou sem `sub`, mesmo principal mantém); P2-2 corrigido (ordem real com timeout recupera a resposta humana uma vez, sem repetir em reruns; replay dos payloads reais passa; as mesmas sondas falham em `733cc37`); P3-1 e P3-2 corrigidos. Sem regressão em navegação sem POST, chave de idempotência e login/logout do contrato.
+- **P2-A — rascunho do operador vaza para outro operador no mesmo navegador.** `USER_SCRATCH_KEYS` (`app.py:597-606`) e `forget_conversation` (`app.py:628`) não cobrem `ticket_text_reply`, `ticket_text_reject`, `ticket_action`, `ticket_confirm`, `ticket_solve_confirm`, `ticket_status` e `ticket_choice` (`app.py:760-819`). Como a tela de login termina em `st.stop()`/`st.rerun()`, o Streamlit não descarta os widgets. Sonda: A digita um rascunho, sai (ou expira) e B entra → texto visível em 6/6 cenários; se B confirmar, o texto de A sai em nome de B com chave nova. Já existia em `733cc37`.
+- **P3-A:** mutantes sobreviventes por falta de teste: R05 (`sub` ausente nos dois tokens), R13 (`results_run_choice` fora da limpeza), R18 (vários turnos de operador antes da pergunta), R19, R21 e R26 (fronteiras do fallback); R14, R16, R23 e R24 equivalentes.
+- **P3-B:** o README do web remete à seção "Streamlit interface" do README do backend, que em `386025a` ainda fala de chave de acesso; atualizar no fechamento (T68).
+- **Não comprovado:** navegador e ticketing reais (QA); P2-A demonstrado com `AppTest` e pela fonte do Streamlit, sem browser.
