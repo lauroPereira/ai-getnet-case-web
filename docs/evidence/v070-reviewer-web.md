@@ -70,3 +70,15 @@ Rotas `/v1/auth/token` e `/v1/auth/revoke` fixadas à mão em `api.py`; `generat
 - **P3-A:** mutantes sobreviventes por falta de teste: R05 (`sub` ausente nos dois tokens), R13 (`results_run_choice` fora da limpeza), R18 (vários turnos de operador antes da pergunta), R19, R21 e R26 (fronteiras do fallback); R14, R16, R23 e R24 equivalentes.
 - **P3-B:** o README do web remete à seção "Streamlit interface" do README do backend, que em `386025a` ainda fala de chave de acesso; atualizar no fechamento (T68).
 - **Não comprovado:** navegador e ticketing reais (QA); P2-A demonstrado com `AppTest` e pela fonte do Streamlit, sem browser.
+
+## Tarefa 67, rodada 5 — correções necessárias (um P2 residual)
+
+- **Papel:** Reviewer novo em contexto frio (subagente `reviewer`, sonnet/xhigh); leu a tarefa até "Validação", o contrato e o parecer da rodada 4; não leu as passagens do Developer.
+- **Candidato:** `0bc8d86`, diff `9f6a894..0bc8d86` em `app.py` e `tests/test_v070_interface.py`, no worktree `review-web`; HEAD, status e hashes iguais antes e depois.
+- **Números:** script estrito **83 passed**, Ruff limpo, código 0. Mutação: P3-A 6/6 mortos (R05, R13, R18, R19, R21, R26, cada um por teste nomeado); limpeza 9/10 (C8 sobrevive); auditoria AST 6/6 nos casos que cobre.
+- **P2-A corrigido para widgets com `key`:** sonda do operador 113/113 (fila, ticket, ação, rascunhos e confirmações de A não chegam a B após logout, revoke falho, expiração ou `401` do ticketing; mesmo operador após expirar mantém o rascunho com a confirmação desmarcada). Modo e URL do backend preservados; navegação sem POST e chave de idempotência sem regressão.
+- **P2-B — widgets sem `key` passam ao próximo principal.** A limpeza (`app.py:641-672`) só alcança chaves; widgets com id automático sobrevivem porque a tela de login termina em `st.stop()` (`app.py:970`). Afetados: rádio "Router do atendimento" (`app.py:1010`), "Nome do novo perfil" (`app.py:1383`), "Permitir seleção pela sessão demo" (`app.py:1385`), "Conteúdo fictício" da KB (`app.py:1462`) e, por inspeção, "Rascunho para editar ou publicar" (`app.py:1397`). Sonda: 0/10 — o admin B vê o nome e o texto da KB digitados pelo admin A; a mensagem do lojista B sai com o Router escolhido por A. Backend continua autoritativo.
+- **P3-B:** a auditoria por AST só vê `key=` constante em sete tipos de widget; não vê `slider`, `toggle`, `date_input`, `select_slider`, `segmented_control`, `pills`, chave f-string, widget sem `key`, chave em variável nem `**{"key": …}`.
+- **P3-C:** `ticket_solve_confirm` (`app.py:828`) continua marcado na expiração do mesmo operador e na troca de ticket; "Resolver" fica habilitado. Anterior a esta rodada.
+- **P3-D:** nenhum teste fixa a limpeza de `ticket_attempt` (C8 sobrevive), embora o código a faça.
+- **Não comprovado:** navegador e servidor Streamlit reais (só `AppTest`); ticketing real; alguns widgets de comparação, avaliação e KB só pela lista e pela auditoria.
