@@ -593,17 +593,56 @@ SESSION_KEYS = ("api_token", "api_role", "api_principal", "api_token_exp")
 TICKET_STATE_KEYS = ("ticket_attempt", "ticket_notice", "ticket_confirm_context")
 # Per-user state beyond the token: the conversation, its runs and the analyses started from them. It belongs to
 # `conversation_owner` (the `sub` of the token that created it) and must never reach another principal. Besides the
-# defaults below, these keys hold what the user typed, picked or estimated; they are dropped with the conversation.
+# defaults below, these keys hold what the user typed, picked, confirmed or estimated; they are dropped with the
+# conversation. Streamlit keeps the state of keyed widgets across the login screen (the script stops before them), so
+# every keyed value widget of this file is listed here or in the audit test's allowlist (`tests/test_v070_interface.py`).
 USER_SCRATCH_KEYS = (
+    # Atendimento and Resultados
     "message_input",
     "compare_input",
+    "profile",
+    "scenario_choice",
+    "comparison_selection",
     "results_run_choice",
+    "eval_confirm",
+    "eval_repeat",
+    "cmp_profiles",
+    "cmp_scenarios",
+    "cmp_repetitions",
+    "cmp_mechanism",
+    "cmp_confirm",
+    "cmp_bar_choice",
+    "cmp_point_choice",
+    "cmp_cell_choice",
+    # Administração
+    "kb_document_choice",
+    "kb_candidate_choice",
+    "kb_build_max_cost",
+    "kb_test_max_cost",
+    "kb_confirm_build",
+    "kb_confirm_test",
+    "kb_confirm_activate",
+    "kb_confirm_rollback",
+    # Ticketing (the operator's draft, queue, ticket, action and confirmations)
+    "ticket_status",
+    "ticket_choice",
+    "ticket_action",
+    "ticket_confirm",
+    "ticket_solve_confirm",
+    # estimates, confirmation contexts and notices derived from the above
     "eval_confirm_context",
     "cmp_confirm_context",
     "kb_estimate",
     "admin_notice",
     *KB_CONFIRMATION_CONTEXTS,
 )
+
+
+def is_user_scratch(key):
+    """Keyed widgets whose key is built at run time: the ticket texts and the admin profile forms."""
+    return key in USER_SCRATCH_KEYS or key.startswith("ticket_text_") or (
+        key.startswith(("create_", "update_")) and key.endswith(("_model", "_output_enabled", "_output_tokens"))
+    )
 
 
 def conversation_defaults():
@@ -628,7 +667,7 @@ def conversation_defaults():
 def forget_conversation():
     """Drop the previous user's conversation, runs and analyses (P2-1)."""
     st.session_state.update(conversation_defaults())
-    for key in USER_SCRATCH_KEYS:
+    for key in [key for key in st.session_state if isinstance(key, str) and is_user_scratch(key)]:
         st.session_state.pop(key, None)
     st.session_state.conversation_owner = None
 

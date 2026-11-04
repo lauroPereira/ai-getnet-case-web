@@ -68,9 +68,13 @@ Developer, rodada 1 (2026-11-03), branch `codex/v0.7.0-identidade-hitl` sobre `3
   - "Atualizar conversa" acha o turno do operador na ordem real `[merchant, assistant(agent), assistant(operator), merchant]` e não repete turno já mostrado.
   - Ramo de `via`/`operator_action` no topo do envelope e seu teste removidos; README sem as chaves de acesso.
   - Script estrito: código 0, 73 testes aprovados; detalhes na [passagem](../evidence/v070-developer-web.md).
+- Rodada 5 (resíduo da revisão da rodada 4):
+  - Fila, ticket, ação, rascunho e confirmações da tela de ticketing, e as demais escolhas e confirmações das telas, saem da sessão no logout e quando outro `sub` entra; o mesmo operador depois de expirar mantém o rascunho.
+  - Testes novos para `sub` ausente nos dois tokens, `results_run_choice`, vários turnos de operador antes da pergunta e as fronteiras da recuperação; auditoria das chaves de widget de `app.py`.
+  - Script estrito: código 0, 83 testes aprovados; detalhes na [passagem](../evidence/v070-developer-web.md).
 
 ## Status
 
 ```text
-Rodadas 1 a 4 implementadas pelo Developer; a rodada 4 corrige os achados da revisão da rodada 3. Aguarda nova revisão.
+Rodadas 1 a 5 implementadas pelo Developer; a rodada 5 fecha o resíduo da revisão da rodada 4 (estado da tela de ticketing entre operadores). Aguarda nova revisão.
 ```

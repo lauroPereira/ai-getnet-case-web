@@ -3,6 +3,7 @@ screen. Network-free: fake assistant and ticketing clients, and httpx.MockTransp
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import time
@@ -626,7 +627,8 @@ def agent_turn(text, route="support", status="answered"):
 class ScriptedChat(FakeAssistant):
     """The assistant as the real backend records a chat: each sent message lands in `turns` before the answer, so a
     timed-out send still leaves its question there. `outcomes` is consumed one per send: "timeout" (the answer is
-    lost), "fixture" (an automatic answer with its run) or the `message` object to answer with."""
+    lost), "lost" (the request never arrived: nothing is recorded), "fixture" (an automatic answer with its run) or
+    the `message` object to answer with."""
 
     def __init__(self, *args, outcomes=(), **kwargs):
         super().__init__(*args, **kwargs)
@@ -635,8 +637,10 @@ class ScriptedChat(FakeAssistant):
     def send_message(self, payload):
         self.payloads.append(payload)
         self.posts.append("send_message")
-        self.turns.append(merchant_turn(payload["message"]))
         outcome = self.outcomes.pop(0)
+        if outcome == "lost":
+            raise httpx.ReadTimeout("synthetic timeout")
+        self.turns.append(merchant_turn(payload["message"]))
         if outcome == "timeout":
             raise httpx.ReadTimeout("synthetic timeout")
         if outcome == "fixture":
@@ -755,8 +759,8 @@ CONVERSATION_STATE_EMPTY = {
 }
 
 
-def merchant_a_conversation(wire, outcomes):
-    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=list(outcomes))
+def merchant_a_conversation(wire, outcomes, sub="merchant:cliente1988"):
+    chat = ScriptedChat("merchant", sub, outcomes=list(outcomes))
     wire(chat, FakeTicketing())
     app = login(real_app(), "cliente1988")
     send(app, "Pergunta da lojista A")
@@ -767,6 +771,7 @@ def merchant_a_conversation(wire, outcomes):
     assert not app.exception
     assert app.session_state["conversation_id"] and app.session_state["runs"] and app.session_state["case_view"]
     assert app.session_state["latest_run"] and app.session_state["chat_history"] and app.session_state["comparison"]
+    assert app.session_state["results_run_choice"] == "req_simulated_latest"  # the picked run is per-user state too
     return chat, app
 
 
@@ -774,6 +779,7 @@ def assert_nothing_of_a_reaches_b(app, chat, a_conversation):
     for key, empty in CONVERSATION_STATE_EMPTY.items():
         assert app.session_state[key] == empty, key
     assert not app.chat_message and "lojista A" not in texts(app)
+    assert "results_run_choice" not in app.session_state
     assert not [button for button in app.button if button.key == "recover_pending_conversation"]
     assert app.text_area(key="message_input").value == "" and app.text_area(key="compare_input").value == ""
     send(app, "Pergunta de B")
@@ -789,6 +795,7 @@ def test_logout_then_another_principal_does_not_inherit_the_conversation(wire):
     assert app.session_state["api_token"] is None and chat.revoked == 1
     for key, empty in CONVERSATION_STATE_EMPTY.items():
         assert app.session_state[key] == empty, key  # dropped at logout, before anyone else signs in
+    assert "results_run_choice" not in app.session_state and "compare_input" not in app.session_state
     chat.sub = "merchant:cliente2000"
     login(app, "cliente2000")
     assert_nothing_of_a_reaches_b(app, chat, a_conversation)
@@ -819,3 +826,172 @@ def test_expiry_then_the_same_principal_keeps_the_conversation(wire):
     send(app, "Mais uma pergunta de A")
     assert chat.payloads[-1]["conversation_id"] == a_conversation
     assert app.session_state["backend_message_count"] == 4
+
+
+def test_tokens_without_sub_never_share_a_conversation(wire):
+    # No `sub` on either token: the two sessions cannot be proven to be the same principal.
+    chat, app = merchant_a_conversation(wire, ("fixture", "timeout", "fixture"), sub=None)
+    a_conversation = app.session_state["conversation_id"]
+    app.session_state["api_token_exp"] = time.time() - 10
+    app.run()
+    assert app.session_state["api_token"] is None and not app.tabs
+    login(app, "cliente1988")
+    assert_nothing_of_a_reaches_b(app, chat, a_conversation)
+
+
+# --- the recovery of a pending question: its boundaries ------------------------------------------------------------
+
+
+def test_recovery_takes_the_last_operator_turn_before_the_question(wire):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, "timeout"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Quero falar com um atendente")
+    chat.turns.append(OPERATOR_TURN | {"text": "Primeira resposta do atendente."})
+    chat.turns.append(OPERATOR_TURN | {"text": "Segunda resposta do atendente."})
+    send(app, "E aí?")
+    recover(app)
+    assert app.session_state["chat_history"][-1]["text"] == "Segunda resposta do atendente."
+    assert app.session_state["backend_message_count"] == 5
+    assert sum(turn.get("via") == "operator" for turn in app.session_state["chat_history"]) == 1
+
+
+def test_recovery_stops_at_the_next_merchant_message(wire):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, "timeout"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Quero falar com um atendente")
+    send(app, "E aí?")  # recorded, never answered
+    chat.turns += [merchant_turn("Outra mensagem, de outra aba"), agent_turn("Resposta à outra mensagem.")]
+    shown = list(app.session_state["chat_history"])
+    recover(app)  # the answer after the later message is not the answer to the pending question
+    assert app.session_state["pending_message"] is not None and app.session_state["chat_history"] == shown
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+
+    chat.turns.insert(2, OPERATOR_TURN)  # the operator reply recorded before the question is
+    recover(app)
+    assert app.session_state["chat_history"][-1]["via"] == "operator"
+    assert app.session_state["backend_message_count"] == 4 and app.session_state["pending_message"] is None
+
+
+def test_recovery_ignores_assistant_turns_that_are_not_the_operators(wire):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=["fixture", "timeout"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Primeira pergunta")
+    app.session_state["backend_message_count"] = 1  # the count lags behind the backend: its automatic answer is new
+    send(app, "E aí?")
+    assert app.session_state["pending_message"]["baseline_message_count"] == 1
+    recover(app)  # [assistant(agent), merchant]: nothing answers the question yet
+    assert app.session_state["pending_message"] is not None
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+
+
+def test_recovery_checks_the_text_of_the_question(wire):
+    chat = ScriptedChat("merchant", "merchant:cliente1988", outcomes=[HANDOFF_MESSAGE, "lost"])
+    wire(chat, FakeTicketing())
+    app = login(real_app(), "cliente1988")
+    send(app, "Quero falar com um atendente")
+    chat.turns.append(OPERATOR_TURN)
+    send(app, "E aí?")  # the request never reached the backend
+    chat.turns.append(merchant_turn("Outra pergunta, de outra aba"))
+    recover(app)  # a merchant message that is not ours does not make the operator turn our answer
+    assert app.session_state["pending_message"] is not None and not attendant_labels(app)
+    assert any("ainda não há resposta nova" in str(item.value).lower() for item in app.info)
+
+
+# --- the operator's screen is per-user state too ---------------------------------------------------------------------
+
+DRAFT = "Rascunho da Ana: o crédito cai amanhã."
+
+
+def open_tickets():
+    return FakeTicketing(ticket("tkt_00000a", "open"), ticket("tkt_00000b", "open"))
+
+
+def write_a_draft(app):
+    """Ana picks the Atendimento queue, the second ticket and the reply action, writes a draft and ticks both boxes."""
+    app.radio(key="ticket_status").set_value("open").run()
+    choice = app.selectbox(key="ticket_choice")
+    choice.select(next(option for option in choice.options if "00000B" in option)).run()
+    app.radio(key="ticket_action").set_value("reply").run()
+    app.text_area(key="ticket_text_reply").set_value(DRAFT).run()
+    app.checkbox(key="ticket_confirm").check().run()
+    app.checkbox(key="ticket_solve_confirm").check().run()
+    assert not app.exception
+
+
+def leave(app, how):
+    if how == "logout":
+        app.button(key="logout").click().run()
+    else:
+        app.session_state["api_token_exp"] = time.time() - 10
+        app.run()
+    assert app.session_state["api_token"] is None and not app.tabs
+
+
+@pytest.mark.parametrize("how", ["logout", "expiry"])
+def test_another_operator_does_not_inherit_the_previous_operators_screen(wire, how):
+    assistant, _ = wire(FakeAssistant(), open_tickets())
+    app = login(real_app())
+    write_a_draft(app)
+    leave(app, how)
+    assistant.sub = "operator:op_bia"
+    login(app, "op_bia")
+    # what Ana typed, picked and confirmed is gone from the session, not only hidden
+    for key in ("ticket_text_reply", "ticket_action", "ticket_confirm", "ticket_solve_confirm", "ticket_choice"):
+        assert key not in app.session_state, key
+    assert DRAFT not in repr(app.session_state)
+    assert app.radio(key="ticket_status").value == "new"  # the default queue
+    app.radio(key="ticket_status").set_value("open").run()
+    assert "00000A" in app.selectbox(key="ticket_choice").value  # the first ticket, not Ana's second one
+    assert app.radio(key="ticket_action").value == "approve"
+    app.radio(key="ticket_action").set_value("reply").run()
+    assert app.text_area(key="ticket_text_reply").value == ""
+    assert not app.checkbox(key="ticket_confirm").value and not app.checkbox(key="ticket_solve_confirm").value
+    assert app.button(key="ticket_send").disabled and not app.exception
+
+
+def test_expiry_then_the_same_operator_keeps_the_draft(wire):
+    wire(FakeAssistant(), open_tickets())
+    app = login(real_app())
+    write_a_draft(app)
+    leave(app, "expiry")
+    login(app)
+    assert app.radio(key="ticket_status").value == "open" and "00000B" in app.selectbox(key="ticket_choice").value
+    assert app.text_area(key="ticket_text_reply").value == DRAFT
+    assert not app.checkbox(key="ticket_confirm").value  # a new session asks for the confirmation again
+
+
+def test_admin_form_choices_do_not_reach_the_next_admin(wire):
+    wire(FakeAssistant("admin", "admin:default"), FakeTicketing())
+    app = login(real_app(), "admin")
+    form_keys = [key for key in app.session_state if key.startswith(("create_", "update_"))]
+    assert form_keys and any(key.endswith("_model") for key in form_keys)  # the built keys exist before leaving
+    app.button(key="logout").click().run()
+    assert not [key for key in app.session_state if key.startswith(("create_", "update_"))]
+
+
+def test_every_keyed_value_widget_is_dropped_with_the_conversation():
+    """Streamlit keeps the state of keyed widgets across the login screen, so a widget added without being listed in
+    USER_SCRATCH_KEYS would leak from one user to the next. Keys built at run time are covered by the tests above."""
+    tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
+    widgets = {"text_input", "text_area", "number_input", "selectbox", "radio", "checkbox", "multiselect"}
+    keyed = {
+        keyword.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in widgets
+        for keyword in node.keywords
+        if keyword.arg == "key" and isinstance(keyword.value, ast.Constant)
+    }
+    scratch = {
+        node.value
+        for statement in tree.body
+        if isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "USER_SCRATCH_KEYS" for target in statement.targets)
+        for node in ast.walk(statement.value)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    not_per_user = {"mode", "sim_role", "login_username", "login_password"}  # the sidebar; the login keys leave on submit
+    assert len(keyed) > 25 and len(scratch) > 25  # the audit does see the widgets and the list
+    assert keyed - not_per_user - scratch == set()

@@ -232,3 +232,52 @@ Os testes novos estão em `tests/test_v070_interface.py`, com um assistente fals
 ### Próxima ação
 
 Nova revisão independente da rodada 4; QA depois, com navegador, backend e ticketing reais.
+
+## Tarefa 67, rodada 5
+
+- Papel e responsável: Developer do Time B, resíduo do [parecer da rodada 4](v070-reviewer-web.md) (commit `f134102`; o candidato revisado foi `9f6a894`).
+- Escopo: `app.py`, `tests/test_v070_interface.py`, a tarefa 67 e esta passagem. Backend não tocado.
+- Base e versão final: base `f134102`; versão final é o commit desta rodada. Independência: não-independente (relato do autor). Identidade do Git conferida antes do commit (`lauroPereira <lauro.s.pereira@gmail.com>`).
+
+### P2-A: a tela de ticketing não passa de um operador para outro
+
+- **Causa:** na rodada 4 eu supus que o Streamlit descartava os widgets que não são desenhados (a tela de login termina em `st.stop()`/`st.rerun()`). O parecer mostrou que não: o estado dos widgets com chave sobrevive, e eu só tinha coberto os campos do chat. O rascunho de uma operadora aparecia para o próximo operador no mesmo navegador.
+- **Mudança em `app.py`:**
+  - `USER_SCRATCH_KEYS` passou a listar todo widget de valor com chave constante: as sete chaves do ticketing citadas no parecer (`ticket_status`, `ticket_choice`, `ticket_action`, `ticket_confirm`, `ticket_solve_confirm`, e `ticket_text_reply`/`ticket_text_reject`, que são montadas por `ticket_text_{ação}`) e as que também tinham escapado.
+  - Escaparam: `profile`, `scenario_choice`, `comparison_selection`, `eval_confirm`, `eval_repeat`, `cmp_profiles`, `cmp_scenarios`, `cmp_repetitions`, `cmp_mechanism`, `cmp_confirm`, `cmp_bar_choice`, `cmp_point_choice`, `cmp_cell_choice`, `kb_document_choice`, `kb_candidate_choice`, `kb_build_max_cost`, `kb_test_max_cost` e as quatro caixas `kb_confirm_*`.
+  - `is_user_scratch(key)` cobre também as chaves montadas em tempo de execução: `ticket_text_*` e os formulários de perfil do administrador (`create_*`/`update_*` terminando em `_model`, `_output_enabled` ou `_output_tokens`).
+  - `forget_conversation()` varre `st.session_state` e apaga as chaves que `is_user_scratch` reconhece. Roda no logout e no login de outro `sub` (ou sem `sub`), como na rodada 4.
+- **O que continua de propósito:** `mode`, `sim_role` e a URL do backend (escolhas do navegador, não do usuário); botões não guardam estado.
+- **Expiração e mesmo operador:** a expiração não apaga nada, então fila, ticket, ação e rascunho voltam para o mesmo `sub`. A caixa de confirmação volta desmarcada, porque `end_session` zera `ticket_confirm_context` e `ticket_attempt` (a chave de idempotência); uma sessão nova pede a confirmação de novo.
+
+### P3-A: testes para os mutantes que sobreviveram
+
+Em `tests/test_v070_interface.py`:
+
+- R05: `test_tokens_without_sub_never_share_a_conversation` (sem `sub` nos dois tokens).
+- R13: `merchant_a_conversation` confere que `results_run_choice` existe para o A, e a conferência de que B não o recebe ficou no teste do logout e no auxiliar comum.
+- R18: `test_recovery_takes_the_last_operator_turn_before_the_question`.
+- R19: `test_recovery_stops_at_the_next_merchant_message` (a resposta a uma mensagem posterior não é a resposta à pendente; depois, com o turno do operador gravado antes da pergunta, ele passa a valer).
+- R21: `test_recovery_ignores_assistant_turns_that_are_not_the_operators` (contagem atrasada, só uma resposta automática antes da pergunta).
+- R26: `test_recovery_checks_the_text_of_the_question` (o assistente falso ganhou o desfecho `lost`, em que o pedido nunca chegou).
+- P2-A: `test_another_operator_does_not_inherit_the_previous_operators_screen` (2 casos, logout e expiração: chaves ausentes da sessão, fila padrão, primeiro ticket, ação `approve`, texto vazio, caixas desmarcadas, envio desabilitado), `test_expiry_then_the_same_operator_keeps_the_draft` e `test_admin_form_choices_do_not_reach_the_next_admin`.
+- Auditoria: `test_every_keyed_value_widget_is_dropped_with_the_conversation` lê `app.py` por AST e exige que todo `text_input`, `text_area`, `number_input`, `selectbox`, `radio`, `checkbox` e `multiselect` com chave constante esteja em `USER_SCRATCH_KEYS` (ou seja da barra lateral). Um widget novo sem entrada na lista derruba o teste.
+
+### Evidência
+
+- **Comando:** `PYTHONPATH=src PYTEST_ADDOPTS="-p no:cacheprovider --basetemp .pytest_cache/t67-r5-dev-20261103-212040" .venv-v040/Scripts/python.exe tools/scripts/lint_and_tests.py --strict` → código 0, **83 testes aprovados** em 89,69 s (73 + 10), Ruff "All checks passed!", estrutura e skills válidas.
+- **Mutação em `app.py`** (restaurado byte a byte depois): 15 mutantes, 15 mortos, cada um com `-x` no subconjunto de testes que cita a correção.
+  - Limpeza: prefixo `ticket_text_` desligado; chaves `create_`/`update_` desligadas; cada uma das cinco chaves fixas do ticketing retirada da lista; `results_run_choice` retirada (R13); `cmp_profiles` e `eval_repeat` retiradas (pegos pela auditoria).
+  - Sessão: `sub` ausente reaproveita a conversa (R05).
+  - Recuperação: primeiro turno de operador no lugar do último (R18); sem parada no próximo lojista (R19); qualquer `assistant` conta no ramo do operador (R21); sem a guarda do texto da pergunta (R26).
+- Nenhuma chamada paga, nenhum serviço real, sem push.
+
+### Limitações
+
+- Navegador real, backend real e ticketing real continuam sem exercício (QA). A limpeza foi demonstrada com `AppTest`. A suposição da rodada 4 sobre o descarte automático de widgets não valeu; a correção não depende dela.
+- A auditoria por AST só vê chaves constantes. Um widget novo com chave montada em tempo de execução precisa entrar em `is_user_scratch`; hoje isso cobre `ticket_text_*` e os formulários de perfil do administrador.
+- Fica para o fechamento (P3-B, T68): o README do backend ainda fala de chave de acesso na seção "Streamlit interface".
+
+### Próxima ação
+
+Nova revisão independente da rodada 5; QA depois, com navegador, backend e ticketing reais.
