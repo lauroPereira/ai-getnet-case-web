@@ -130,6 +130,23 @@ def test_authorize_login_exchange_refresh_and_revoke(backend):
         probe.close()
 
 
+def test_a_lost_rotation_is_revoked_with_the_old_refresh_token(backend):
+    """What the interface does when a refresh answer is lost: revoke with the access token it still has and the old
+    refresh token. The backend revokes the whole login, including the rotation nobody received."""
+    browser, web = backend
+    attempt = AuthorizationAttempt.create(ISSUER, REDIRECT_URI, CLIENT_ID)
+    first = exchange_code(web, attempt, attempt.validate_callback(sign_in(browser, attempt)))
+    lost = refresh(web, CLIENT_ID, first["refresh_token"])  # the answer never reached the interface
+    api = web_client(browser, first["access_token"])
+    try:
+        api.logout(first["refresh_token"])
+    finally:
+        api.close()
+    with pytest.raises(httpx.HTTPStatusError) as refused:
+        refresh(web, CLIENT_ID, lost["refresh_token"])
+    assert refused.value.response.json()["error"] == "invalid_grant"
+
+
 def test_a_forged_state_or_another_verifier_never_yields_tokens(backend):
     browser, web = backend
     attempt = AuthorizationAttempt.create(ISSUER, REDIRECT_URI, CLIENT_ID)
