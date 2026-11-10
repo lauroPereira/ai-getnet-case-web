@@ -9,7 +9,17 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-from getnet_web.api import APIClient, APIError, close_session_client, get_session_client, session_ended, token_claims
+from getnet_web.api import (
+    DEFAULT_TIMEOUT_SECONDS,
+    WEB_CLIENT_ID,
+    APIError,
+    close_session_client,
+    get_session_client,
+    session_ended,
+    token_claims,
+)
+from getnet_web.oauth import AuthorizationAttempt, exchange_code, refresh
+from getnet_web.oauth_bridge import login_popup, return_from_popup
 from getnet_web.simulated import SimulatedAPI
 from getnet_web.ticketing import (
     STATUSES,
@@ -63,6 +73,18 @@ REVOKE_UNCONFIRMED = (
     "Você saiu desta interface, mas o backend não confirmou a revogação do token: ele pode continuar válido até "
     "expirar. Se a sessão foi usada em um computador compartilhado, avise o administrador."
 )
+LOGIN_REFUSED = "Não foi possível entrar. Clique em Entrar e tente novamente."
+LOGIN_EXPIRED = "A tentativa de login expirou. Clique em Entrar e tente novamente."
+LOGIN_UNREACHABLE = "Backend inacessível. Confira a URL da API e se o backend está em execução."
+API_URL_CHANGED = "A URL da API mudou: a sessão anterior foi encerrada. Entre novamente."
+# Login by redirection (backend v0.13.0, task 97): authorization code with PKCE S256 and a rotating refresh token.
+# AUTH_ISSUER is compared exactly with the `iss` of the redirect; AUTH_REDIRECT_URI must be registered, exactly, in the
+# backend's OAUTH_REDIRECT_URIS, and the interface must be opened at that address (the popup reaches this tab only on
+# the same origin).
+AUTH_ISSUER = os.environ.get("AUTH_ISSUER", "http://127.0.0.1:8000")
+AUTH_REDIRECT_URI = os.environ.get("AUTH_REDIRECT_URI", "http://localhost:8501/")
+OAUTH_ATTEMPT_SECONDS = 300  # an unfinished login starts over with a new state and verifier
+REFRESH_MARGIN_SECONDS = 30  # the access token is renewed this long before it expires
 STATUS_LABELS = {"new": "Recepção", "open": "Atendimento", "pending": "Envio", "solved": "Finalização"}
 ATTENDANT_ACTIONS = {"approve": "rascunho aprovado", "reply": "resposta do atendente", "reject": "refeita após rejeição"}
 ACTION_LABELS = {"approve": "Aprovar o rascunho", "reply": "Responder", "reject": "Rejeitar com instrução"}
@@ -589,7 +611,7 @@ def render_comparison(result):
             open_runs([openable[cell_labels.index(cell_choice)]["request_id"]])
 
 
-SESSION_KEYS = ("api_token", "api_role", "api_principal", "api_token_exp")
+SESSION_KEYS = ("api_token", "api_role", "api_principal", "api_token_exp", "api_refresh_token", "api_base_url")
 TICKET_STATE_KEYS = (
     "ticket_attempt",
     "ticket_notice",
@@ -887,7 +909,88 @@ def render_ticketing(token):
     render_ticket_actions(client, detail)
 
 
+def install_token_response(session, base_url, *, expected_principal=None):
+    """Keeps the tokens of a code exchange or a refresh in this Streamlit session (never on the page). A refresh that
+    answers for another principal raises ValueError before anything is kept."""
+    access, next_refresh = session.get("access_token"), session.get("refresh_token")
+    if not isinstance(access, str) or not access or not isinstance(next_refresh, str) or not next_refresh:
+        raise ValueError("Incomplete token response")
+    claims = token_claims(access)
+    principal = claims.get("sub")
+    if expected_principal is not None and principal != expected_principal:
+        raise ValueError("Principal changed during refresh")
+    if not principal or principal != st.session_state.conversation_owner:
+        forget_conversation()
+    st.session_state.conversation_owner = principal
+    st.session_state.api_token = access
+    st.session_state.api_refresh_token = next_refresh
+    st.session_state.api_role = claims.get("role")
+    st.session_state.api_principal = principal
+    expires_in = session.get("expires_in")
+    st.session_state.api_token_exp = claims.get("exp") or (time.time() + float(expires_in) if expires_in else None)
+    st.session_state.api_base_url = base_url
+    st.session_state.login_notice = None
+
+
+def start_login_attempt(context):
+    """A new state and verifier, held only by this session. The context (backend, issuer, redirect, client) is part of
+    the attempt: changing any of them starts another one."""
+    _base_url, issuer, redirect_uri, client_id = context
+    st.session_state.oauth_attempt = AuthorizationAttempt.create(issuer, redirect_uri, client_id)
+    st.session_state.oauth_context = context
+    st.session_state.oauth_started = time.monotonic()
+
+
+def finish_login(attempt, callback, base_url, expired):
+    """Validates the redirect against this session's attempt (state, iss, a single code, no error) and only then
+    exchanges the code with the verifier. Returns the notice for the login screen, or None when the session opened."""
+    if expired:
+        return LOGIN_EXPIRED
+    try:
+        code = attempt.validate_callback(callback)
+        with httpx.Client(base_url=base_url.rstrip("/"), timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            session = exchange_code(client, attempt, code)
+        install_token_response(session, base_url)
+    except httpx.TransportError:
+        return LOGIN_UNREACHABLE
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        return LOGIN_REFUSED
+    return None
+
+
+def renew_tokens(base_url):
+    """Rotates the refresh token. The old one is dropped before the call and never sent again: a lost answer may mean
+    the rotation happened, and a reuse would revoke the whole login. Any failure ends the session."""
+    old_refresh, st.session_state.api_refresh_token = st.session_state.api_refresh_token, None
+    try:
+        if not old_refresh or not st.session_state.api_principal:
+            raise ValueError("No refresh token or principal")
+        with httpx.Client(base_url=base_url.rstrip("/"), timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            session = refresh(client, WEB_CLIENT_ID, old_refresh)
+        install_token_response(session, base_url, expected_principal=st.session_state.api_principal)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        end_session(SESSION_EXPIRED)
+
+
+def logout_and_end(base_url, notice=None):
+    """Revokes the access token and the refresh family at the backend that issued them, then ends the session and
+    drops the conversation. An unconfirmed revocation is announced instead of `notice`."""
+    try:
+        client = get_session_client(st.session_state, base_url, st.session_state.api_token)
+        client.logout(st.session_state.api_refresh_token)
+    except (APIError, httpx.TransportError):
+        notice = REVOKE_UNCONFIRMED
+    finally:
+        end_session(notice, forget=True)
+
+
 st.set_page_config(page_title="Getnet Merchant Assistant", page_icon="💬", layout="wide")
+# The callback page runs in the popup, in a different Streamlit session. It forwards the
+# response to the original session, which alone holds the verifier and validates state.
+if any(key in st.query_params for key in ("code", "state", "iss", "error")):
+    callback = {key: st.query_params.get_all(key) for key in st.query_params}
+    return_from_popup(callback)
+    st.stop()
 st.title("Assistente Getnet")
 st.caption("Atendimento, resultados rastreáveis e administração. Chaves de provedores ficam no backend.")
 
@@ -897,6 +1000,8 @@ for key, default in {
     "api_role": None,
     "api_principal": None,
     "api_token_exp": None,
+    "api_refresh_token": None,
+    "api_base_url": None,
     "conversation_owner": None,
     "login_notice": None,
     "ticket_attempt": None,
@@ -929,62 +1034,43 @@ else:
         disabled=os.environ.get("LOCK_BACKEND_URL", "").lower() in {"1", "true", "yes"},
     )
     token_exp = st.session_state.api_token_exp
-    if st.session_state.api_token and token_exp and time.time() >= token_exp:
-        end_session(SESSION_EXPIRED)
+    if st.session_state.api_token and st.session_state.api_base_url != base_url:
+        # The tokens belong to the backend that issued them: revoked there, never sent to the new address.
+        if st.session_state.api_base_url:
+            logout_and_end(st.session_state.api_base_url, API_URL_CHANGED)
+        else:
+            end_session(API_URL_CHANGED, forget=True)
+    elif st.session_state.api_token and token_exp and time.time() >= token_exp - REFRESH_MARGIN_SECONDS:
+        renew_tokens(base_url)
     role = st.session_state.api_role
     if not st.session_state.api_token:
         if st.session_state.login_notice:
             st.sidebar.warning(st.session_state.login_notice)
-        login_form = st.sidebar.form("login_form", clear_on_submit=True)
-        with login_form:
-            username = st.text_input("Usuário", key="login_username")
-            password = st.text_input("Senha", type="password", key="login_password")
-            submitted = st.form_submit_button("Entrar", key="login")
-        if submitted:
-            # The form already clears its fields; dropping the keys also covers runs that stop early (operator area).
-            for login_key in ("login_username", "login_password"):
-                st.session_state.pop(login_key, None)
-        if submitted and username.strip() and password:
-            try:
-                login_client = APIClient(base_url)
-                try:
-                    session = login_client.login(username.strip(), password)
-                finally:
-                    login_client.close()
-                claims = token_claims(session["access_token"])
-                if not claims.get("sub") or claims.get("sub") != st.session_state.conversation_owner:
-                    forget_conversation()  # another (or unknown) principal never inherits the previous conversation
-                st.session_state.conversation_owner = claims.get("sub")
-                st.session_state.api_token = session["access_token"]
-                st.session_state.api_role = claims.get("role")
-                st.session_state.api_principal = claims.get("sub")
-                expires_in = session.get("expires_in")
-                st.session_state.api_token_exp = claims.get("exp") or (
-                    time.time() + float(expires_in) if expires_in else None
-                )
-                st.session_state.login_notice = None
-                st.rerun()
-            except APIError as exc:
-                st.sidebar.error(f"Não foi possível entrar: {explain(exc)}")
-            except httpx.TransportError:
-                st.sidebar.error("Backend inacessível. Confira a URL da API e se o backend está em execução.")
+        context = (base_url, AUTH_ISSUER, AUTH_REDIRECT_URI, WEB_CLIENT_ID)
+        if st.session_state.get("oauth_attempt") is None or st.session_state.get("oauth_context") != context:
+            start_login_attempt(context)
+        attempt = st.session_state.oauth_attempt
+        with st.sidebar:
+            callback = login_popup(attempt.authorization_url(base_url.rstrip("/") + "/v1/auth/authorize"), attempt.state)
+        expired = time.monotonic() - st.session_state.oauth_started > OAUTH_ATTEMPT_SECONDS
+        if callback is not None:
+            # The attempt is spent before any network call, whatever the outcome; the next run starts a new one.
+            st.session_state.oauth_attempt = None
+            st.session_state.login_notice = finish_login(attempt, callback, base_url, expired)
+            st.rerun()
+        elif expired:
+            st.session_state.oauth_attempt = None  # the button must not keep a stale state and verifier
+            st.rerun()
     else:
         principal = st.session_state.api_principal
         st.sidebar.success(
             f"Sessão ativa · papel {st.session_state.api_role}" + (f" · {principal}" if principal else "")
         )
         if st.sidebar.button("Encerrar sessão", key="logout"):
-            logout_client = get_session_client(st.session_state, base_url, st.session_state.api_token)
-            logout_notice = None
-            try:
-                logout_client.logout()
-            except (APIError, httpx.TransportError):
-                logout_notice = REVOKE_UNCONFIRMED
-            finally:
-                end_session(logout_notice, forget=True)
+            logout_and_end(base_url)
             st.rerun()
 if mode == "Real (API)" and not st.session_state.api_token:
-    st.warning("Entre com o seu usuário e senha para abrir a sessão.")
+    st.warning("Entre pela janela de login para abrir a sessão.")
     st.stop()
 if mode == "Real (API)":
     api = get_session_client(st.session_state, base_url, st.session_state.api_token)

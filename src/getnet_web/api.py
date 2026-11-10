@@ -23,7 +23,7 @@ DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_TIMEOUT_SECONDS", "20"))
 LONG_TIMEOUT_SECONDS = float(os.environ.get("BACKEND_MESSAGE_TIMEOUT_SECONDS", "105"))
 LONG_OPERATIONS = frozenset({"send_v1_message", "compare_routers", "create_evaluation", "kb_build", "kb_test"})
 
-# Public client of the password grant (backend spec v0.7.0, "Contrato entre os times", Identidade).
+# Registered public client of the web login (authorization code with PKCE, backend v0.13.0, task 97).
 WEB_CLIENT_ID = os.environ.get("AUTH_CLIENT_ID", "merchant-assistant-web")
 SESSION_ENDED_CODES = frozenset({"token_required", "invalid_token"})
 
@@ -54,8 +54,7 @@ def session_ended(exc: Exception) -> bool:
 class API(Protocol):
     execution_mode: str
 
-    def login(self, username: str, password: str) -> dict: ...
-    def logout(self) -> None: ...
+    def logout(self, refresh_token: str | None = None) -> None: ...
     def model_catalog(self) -> dict: ...
     def profiles(self) -> list[dict]: ...
     def compare(self, payload: dict) -> dict: ...
@@ -131,36 +130,17 @@ class APIClient:
             )
         return None if response.status_code == 204 else response.json()
 
-    def login(self, username: str, password: str) -> dict:
-        """Password grant (RFC 6749) for the public web client. Errors follow RFC 6749 section 5.2."""
-        form = {"grant_type": "password", "username": username, "password": password, "client_id": WEB_CLIENT_ID}
-        try:
-            method, route = OPERATIONS["auth_token"]  # form encoded (RFC 6749), not JSON
-            response = self._http.request(method, route, data=form)
-        except httpx.TransportError as exc:
-            log.warning("Backend login transport failed", extra={"event": {"error_class": type(exc).__name__}})
-            raise
-        if response.status_code >= 400:
-            try:
-                data = response.json()
-            except ValueError:
-                data = {}
-            code = data.get("error") if isinstance(data, dict) and isinstance(data.get("error"), str) else "http_error"
-            message = (data.get("error_description") if isinstance(data, dict) else None) or "Login failed."
-            if response.status_code == 429:
-                retry = response.headers.get("Retry-After")
-                code, message = "too_many_attempts", f"Too many attempts. Retry after {retry or 'a few'} seconds."
-            raise APIError(response.status_code, code, message)
-        result = response.json()
-        self._token = result["access_token"]
-        return result
-
-    def logout(self) -> None:
-        """Revokes the token's jti on the backend (POST /v1/auth/revoke)."""
+    def logout(self, refresh_token: str | None = None) -> None:
+        """Revokes the access token and, with `refresh_token`, its whole login (POST /v1/auth/revoke, `token` and
+        `token_type_hint` form fields). A 401 means the access token is no longer valid: alone that is a logout, but
+        with a refresh token the backend did not revoke its family, so the logout is not confirmed."""
         method, route = OPERATIONS["auth_revoke"]
-        response = self._http.request(method, route, headers={"Authorization": f"Bearer {self._token}"})
+        response = self._http.request(
+            method, route, headers={"Authorization": f"Bearer {self._token}"},
+            data={"token": refresh_token, "token_type_hint": "refresh_token"} if refresh_token else None,
+        )
         self._token = None
-        if response.status_code >= 400 and response.status_code != 401:
+        if response.status_code >= 400 and (response.status_code != 401 or refresh_token):
             raise APIError(response.status_code, "revoke_failed", "The backend did not confirm the logout.")
 
     def model_catalog(self) -> dict:

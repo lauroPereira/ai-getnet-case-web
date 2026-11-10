@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head><body>
+<button id="login" hidden>Entrar</button><span id="notice"></span>
+<script>
+// Two roles. In the interface: the Entrar button opens the issuer's login in a popup and waits for the redirect.
+// In the popup (the redirect URI, another Streamlit session): hands the redirect parameters to the waiting tab over
+// a same-origin BroadcastChannel and closes. Only the waiting session holds the verifier and validates state and iss.
+const send = (type, extra = {}) => window.parent.postMessage({isStreamlitMessage: true, type, ...extra}, "*");
+send("streamlit:componentReady", {apiVersion: 1});
+send("streamlit:setFrameHeight", {height: 45});
+let channel;
+window.addEventListener("message", event => {
+  if (event.source !== window.parent || event.data.type !== "streamlit:render") return;
+  const args = event.data.args;
+  if (!channel) channel = new BroadcastChannel("getnet-oauth-callback-v1");
+  if (args.callback) {
+    channel.postMessage(args.callback);
+    document.getElementById("notice").textContent = "Pode fechar esta janela e voltar ao atendimento.";
+    try { window.parent.history.replaceState(null, "", window.parent.location.pathname); } catch (_) {}
+    setTimeout(() => { try { window.parent.close(); } catch (_) {} }, 300);
+  } else {
+    // Another tab's login is not this tab's business: only the redirect for this attempt goes to the server,
+    // which validates it again.
+    const expected = new URL(args.url).searchParams.get("state");
+    const button = document.getElementById("login");
+    button.hidden = false;
+    button.onclick = () => {
+      const popup = window.open(args.url, "getnet_login", "popup,width=520,height=720");
+      if (!popup) document.getElementById("notice").textContent = "Permita janelas de login neste navegador.";
+    };
+    channel.onmessage = event => {
+      const state = event.data && event.data.state;
+      if (!Array.isArray(state) || state[0] !== expected) return;
+      send("streamlit:setComponentValue", {value: event.data, dataType: "json"});
+    };
+  }
+});
+</script></body></html>

@@ -23,3 +23,6 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 120
 
+
+[tool.setuptools.package-data]
+getnet_web = ["oauth_component/*.html"]
