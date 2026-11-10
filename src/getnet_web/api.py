@@ -61,6 +61,7 @@ class API(Protocol):
     def send_message(self, payload: dict) -> dict: ...
     def run(self, request_id: str) -> dict: ...
     def conversation(self, conversation_id: str) -> dict: ...
+    def list_conversations(self, limit: int = 5) -> list[dict]: ...
     def create_profile(self, payload: dict) -> dict: ...
     def update_profile(self, profile_id: str, payload: dict) -> dict: ...
     def publish_profile(self, profile_id: str, expected_version: int) -> dict: ...
@@ -95,7 +96,13 @@ class APIClient:
         self._http.close()
 
     def _request(
-        self, operation: str, *, path_params: dict | None = None, body: dict | None = None, authenticated: bool = True
+        self,
+        operation: str,
+        *,
+        path_params: dict | None = None,
+        body: dict | None = None,
+        params: dict | None = None,
+        authenticated: bool = True,
     ) -> Any:
         method, route = OPERATIONS[operation]
         for key, value in (path_params or {}).items():
@@ -106,7 +113,7 @@ class APIClient:
         started = time.perf_counter()
         try:
             timeout = LONG_TIMEOUT_SECONDS if operation in LONG_OPERATIONS else DEFAULT_TIMEOUT_SECONDS
-            response = self._http.request(method, route, json=body, headers=headers, timeout=timeout)
+            response = self._http.request(method, route, json=body, params=params, headers=headers, timeout=timeout)
         except httpx.TransportError as exc:
             log.warning(
                 "Backend HTTP transport failed",
@@ -160,6 +167,10 @@ class APIClient:
 
     def conversation(self, conversation_id: str) -> dict:
         return self._request("get_conversation", path_params={"conversation_id": conversation_id})
+
+    def list_conversations(self, limit: int = 5) -> list[dict]:
+        """The signed-in merchant's conversations, latest activity first, without message text (backend v1.1.0)."""
+        return self._request("list_conversations", params={"limit": limit})["conversations"]
 
     def create_profile(self, payload: dict) -> dict:
         return self._request("create_profile", body=payload)

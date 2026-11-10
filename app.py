@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 
 import altair as alt
 import httpx
@@ -240,6 +241,7 @@ def send_chat_message(api, payload, message_text):
         st.session_state.pending_message = None
     st.session_state.recovered_without_request_id = False
     st.session_state.comparison = None
+    st.session_state.resumed = None  # the notice of a resumed conversation lasts until its next message
     return True
 
 
@@ -303,6 +305,92 @@ def find_pending_reply(conversation, pending):
         item for item in new_messages[:merchant_index] if item.get("role") == "assistant" and is_operator_turn(item)
     ]
     return (delivered[-1], baseline + merchant_index + 1) if delivered else None
+
+
+RESUME_ROLES = ("merchant", "demo")  # roles whose token has a merchant of its own (backend v1.1.0, D2)
+RESUME_FAILED = "Não foi possível retomar a última conversa. Uma conversa nova foi iniciada."
+RESUME_PENDING_REPLY = (
+    "A resposta da atendente ainda não tinha sido entregue nesta conversa: ela volta como resposta da sua próxima "
+    "mensagem."
+)
+
+
+def stamp(value):
+    """An ISO date of the backend as dd/mm/aaaa hh:mm; anything else as it came."""
+    try:
+        return datetime.fromisoformat(value).strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        return literal(str(value or "—"))
+
+
+def history_from_conversation(conversation):
+    """The chat as GET /v1/conversations/{id} records it: the merchant's turns and the assistant's, these with the
+    attendant's marks (via, action, protocol) when a human wrote them."""
+    turns = []
+    for item in conversation.get("messages") or []:
+        if item.get("role") == "merchant":
+            turns.append({"role": "user", "text": item.get("text") or ""})
+        elif item.get("role") == "assistant":
+            turns.append(assistant_turn(item.get("text") or "", item))
+    return turns
+
+
+def resume_last_conversation(api):
+    """After a login with no conversation in the session, brings back the merchant's latest one (GET only, no cost):
+    the list gives its id, the conversation by id its history, and the next message goes to the same id. No
+    conversation keeps the current behaviour; a failure says so briefly and leaves a new conversation."""
+    st.session_state.resume_checked = True
+    try:
+        latest = next(iter(api.list_conversations(limit=1)), None)
+        if latest is None:
+            return
+        conversation = api.conversation(latest["conversation_id"])
+        messages = list(conversation["messages"])
+        history = history_from_conversation(conversation)
+    except APIError as exc:
+        if session_ended(exc):
+            end_session(SESSION_EXPIRED)
+            st.rerun()
+        st.session_state.resume_notice = RESUME_FAILED
+        return
+    except (httpx.TransportError, KeyError, TypeError, AttributeError):
+        st.session_state.resume_notice = RESUME_FAILED
+        return
+    last = next((item for item in reversed(messages) if item.get("role") == "assistant"), {})
+    st.session_state.update(
+        chat_history=history,
+        conversation_id=latest["conversation_id"],
+        backend_message_count=len(messages),
+        case_view={
+            "status": last.get("status"),
+            "route": last.get("route"),
+            "state": conversation.get("state"),
+            "protocol": latest.get("handoff_protocol"),
+            "knowledge_base_version_id": None,
+        },
+        resumed={
+            "conversation_id": latest["conversation_id"],
+            "updated_at": latest.get("updated_at"),
+            "pending_operator_reply": bool(latest.get("pending_operator_reply")),
+        },
+    )
+
+
+def start_new_conversation():
+    """Nova conversa: the chat of this session starts over; nothing is deleted at the backend, and the runs of this
+    session stay in Resultados."""
+    st.session_state.update(
+        chat_history=[],
+        conversation_id=None,
+        backend_message_count=0,
+        pending_message=None,
+        recovered_without_request_id=False,
+        case_view=None,
+        comparison=None,
+        resumed=None,
+        resume_notice=None,
+        resume_checked=True,  # a new conversation is a choice: it is not replaced by the latest one again
+    )
 
 
 def load_scenarios(api):
@@ -712,6 +800,9 @@ def conversation_defaults():
         "profile_comparison_id": None,
         "profile_comparison": None,
         "pending_run_selection": None,
+        "resume_checked": False,  # the latest conversation is looked up once per login (v1.1.0)
+        "resumed": None,
+        "resume_notice": None,
     }
 
 
@@ -1253,6 +1344,16 @@ if not published_profiles:
     st.info("Nenhum perfil publicado está disponível para esta sessão. Peça ao administrador para publicar um perfil.")
     st.stop()
 
+if (
+    mode == "Real (API)"
+    and role in RESUME_ROLES
+    and not st.session_state.resume_checked
+    and not st.session_state.conversation_id
+    and not st.session_state.chat_history
+    and st.session_state.pending_message is None
+):
+    resume_last_conversation(api)
+
 tab_names = ["Atendimento", "Resultados"] + (["Administração"] if role == "admin" else [])
 tabs = st.tabs(tab_names)
 attendance_tab, results_tab = tabs[0], tabs[1]
@@ -1278,6 +1379,21 @@ with attendance_tab:
     scenario_labels = {"Mensagem livre": None} | {item["title"]: item for item in scenarios}
     chosen_label = st.selectbox("Cenário do catálogo", list(scenario_labels), key="scenario_choice")
     chosen_scenario = scenario_labels[chosen_label]
+
+    resume_notice = st.session_state.resume_notice
+    if resume_notice:
+        st.session_state.resume_notice = None  # shown once
+        st.warning(resume_notice)
+    resumed = st.session_state.resumed
+    if resumed and resumed["conversation_id"] == st.session_state.conversation_id:
+        st.info(f"Conversa retomada · última atividade em {stamp(resumed['updated_at'])}")
+        if resumed["pending_operator_reply"]:
+            st.caption(RESUME_PENDING_REPLY)
+    if (st.session_state.conversation_id or st.session_state.chat_history) and st.button(
+        "Nova conversa", key="new_conversation"
+    ):
+        start_new_conversation()
+        st.rerun()
 
     for turn in st.session_state.chat_history:
         attendant = turn.get("via") == "operator"

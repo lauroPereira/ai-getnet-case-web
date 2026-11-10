@@ -91,6 +91,9 @@ class SimulatedAPI:
             raise APIError(404, "not_found", "Comparison not found.")
         return json.loads(json.dumps(self._v060["comparison"]))
 
+    def list_conversations(self, limit: int = 5) -> list[dict]:
+        return []  # the fixtures keep no earlier conversation: every session starts a new one
+
     def conversation(self, conversation_id: str) -> dict:
         result = dict(self._fixtures["conversation"])
         result["conversation_id"] = conversation_id

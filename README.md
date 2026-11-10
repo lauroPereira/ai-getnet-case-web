@@ -51,6 +51,10 @@ Areas by role: merchant and demo see Atendimento and Resultados; operators see o
 
 
 
+**Reloading the page (v1.1.0).** The conversation is kept by the backend, so reloading the page, opening a new tab or signing in again does not lose it. After a merchant or demo login with no conversation in the session, the interface reads the latest conversation of the signed-in merchant (`GET /v1/conversations?limit=1`, then `GET /v1/conversations/{id}`, both without cost), shows its history with the attendant's turns marked **Atendente humano**, says **Conversa retomada** with the date of its last activity, and sends the next message to the same conversation. **Nova conversa** starts another one in this session; nothing is deleted in the backend, and Resultados keeps the runs of this session. With no earlier conversation the screen starts empty, as before; if the list or the conversation cannot be read, a short notice appears and a new conversation starts. An attendant's reply that the backend has not delivered yet shows in the history and also comes back as the answer to the next message, which is when the backend delivers it. Admin sessions, Simulado and Gravado start with a new conversation.
+
+
+
 Errors show what happened and the recovery action (refresh by GET, wait, start a new session or ask the administrator); no internal error is displayed. A transport failure (timeout) during a candidate build, test, activation or rollback discards the estimate and the confirmations and asks for a reload (GET) before any repetition, so a paid action is never repeated blindly. When `LOCK_BACKEND_URL` is on, Simulado offers only the demo role.
 
 
@@ -92,7 +96,7 @@ The browser opens the login at `AUTH_AUTHORIZE_URL` and comes back to `AUTH_REDI
 
 
 
-`openapi-v1.json` is the backend contract snapshot (v0.7.0: backend commit `7079920`, with `/v1/auth/token` and `/v1/auth/revoke`; `/v1/sessions` is gone). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
+`openapi-v1.json` is the backend contract snapshot (v1.1.0: backend commit `9d3b25d`, with `GET /v1/conversations`; exported with the demonstration routes off). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
 
 
 

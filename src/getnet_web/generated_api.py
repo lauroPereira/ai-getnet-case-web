@@ -12,6 +12,7 @@ OPERATIONS = {
     "send_v1_message": ("POST", "/v1/messages"),
     "get_run": ("GET", "/v1/runs/{request_id}"),
     "get_conversation": ("GET", "/v1/conversations/{conversation_id}"),
+    "list_conversations": ("GET", "/v1/conversations"),
     "kb_documents": ("GET", "/v1/kb/documents"),
     "kb_document": ("GET", "/v1/kb/documents/{document_id}"),
     "kb_save_draft": ("PUT", "/v1/kb/drafts/{document_id}"),

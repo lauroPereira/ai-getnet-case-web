@@ -18,6 +18,7 @@ ALIASES = {
     "send_v1_message": "messages_v1_v1_messages_post",
     "get_run": "run_v1_runs__request_id__get",
     "get_conversation": "conversation_v1_conversations__conversation_id__get",
+    "list_conversations": "conversations_list_v1_conversations_get",
     "kb_documents": "kb_documents_v1_kb_documents_get",
     "kb_document": "kb_document_v1_kb_documents__document_id__get",
     "kb_save_draft": "kb_save_draft_v1_kb_drafts__document_id__put",
