@@ -11,13 +11,14 @@ environment with the backend's dependencies plus httpx, with both `src` folders 
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 
 from getnet_web.api import APIClient, APIError, token_claims
-from getnet_web.oauth import AuthorizationAttempt, exchange_code, refresh
+from getnet_web.oauth import AuthorizationAttempt, authorization_endpoint, exchange_code, refresh
 
 backend_app = pytest.importorskip("merchant_assistant.api.app", reason="backend package not on the path")
 backend_identity = pytest.importorskip("merchant_assistant.api.identity")
@@ -157,3 +158,45 @@ def test_a_forged_state_or_another_verifier_never_yields_tokens(backend):
     with pytest.raises(httpx.HTTPStatusError) as refused:
         exchange_code(web, other, other.validate_callback(params))
     assert refused.value.response.json()["error"] == "invalid_grant"
+
+
+def test_tunnel_login_at_the_public_address_and_tokens_only_at_the_internal_one(backend):
+    """Backend v1.0.0 task 108 (ADR 0026): behind the tunnel the browser opens the login page at the public https
+    origin (AUTH_AUTHORIZE_URL) and is sent back to the public redirect URI with the backend's own `iss`; the
+    interface's server exchanges, renews and revokes only at its internal address."""
+    browser, web = backend
+    public = "https://demo-tunnel.example"  # stands for the ephemeral trycloudflare.com address
+    public_redirect = f"{public}/"
+    browser.app.state.settings.oauth_redirect_uris += f",{CLIENT_ID}={public_redirect}"  # registered for this opening
+    visitor = testclient.TestClient(browser.app, base_url=public)
+    try:
+        attempt = AuthorizationAttempt.create(ISSUER, public_redirect, CLIENT_ID)
+        login_url = attempt.authorization_url(authorization_endpoint(BASE_URL, f"{public}/v1/auth/authorize"))
+        authorize = urlsplit(login_url)
+        assert f"{authorize.scheme}://{authorize.netloc}" == public
+        page = visitor.get(f"{authorize.path}?{authorize.query}")
+        assert page.status_code == 200
+        actions = re.findall(r'<form method="post" action="([^"]*)"', page.text)
+        assert actions == ["/v1/auth/authorize"]  # relative: the form stays on the public origin
+        form = {name: values[0] for name, values in parse_qs(authorize.query).items()}
+        login = form | {"username": USER, "password": backend_testing.TEST_USER_PASSWORDS[USER]}
+        back = visitor.post(actions[0], data=login, follow_redirects=False)
+        assert back.status_code == 303 and back.headers["location"].startswith(f"{public_redirect}?")
+        code = attempt.validate_callback(parse_qs(urlsplit(back.headers["location"]).query))  # iss: ISSUER, unchanged
+    finally:
+        visitor.close()
+
+    assert str(web.base_url).rstrip("/") == BASE_URL  # the server side: never the public address
+    first = exchange_code(web, attempt, code)
+    second = refresh(web, CLIENT_ID, first["refresh_token"])
+    api = web_client(browser, second["access_token"])
+    try:
+        assert api.profiles()
+        api.logout(second["refresh_token"])
+    finally:
+        api.close()
+    with pytest.raises(httpx.HTTPStatusError) as refused:
+        refresh(web, CLIENT_ID, second["refresh_token"])
+    assert refused.value.response.json()["error"] == "invalid_grant"
+    for secret in (code, attempt.verifier, first["refresh_token"], second["access_token"]):
+        assert secret not in login_url

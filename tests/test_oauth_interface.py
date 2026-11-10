@@ -98,7 +98,7 @@ def rerun_requested():
 
 @pytest.fixture
 def flow(monkeypatch):
-    for name in ("AUTH_ISSUER", "AUTH_REDIRECT_URI", "BACKEND_API_URL"):
+    for name in ("AUTH_ISSUER", "AUTH_REDIRECT_URI", "BACKEND_API_URL", "AUTH_AUTHORIZE_URL"):
         monkeypatch.delenv(name, raising=False)
     issuer, window, assistant = Issuer(), LoginWindow(), FakeAssistant("merchant", "merchant:cliente1988")
     transport = httpx.MockTransport(issuer.handle)
