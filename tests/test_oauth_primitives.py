@@ -15,6 +15,7 @@ def test_authorize_challenge_and_callback_validation():
     challenge = base64.urlsafe_b64encode(hashlib.sha256(attempt.verifier.encode()).digest()).decode().rstrip("=")
     assert query["code_challenge"] == [challenge]
     assert query["code_challenge_method"] == ["S256"]
+    assert attempt.verifier not in repr(attempt) and attempt.state not in repr(attempt)  # never in a log or dump
     valid = {"state": [attempt.state], "iss": [attempt.issuer], "code": ["code"]}
     assert attempt.validate_callback(valid) == "code"
     for invalid in (valid | {"state": ["wrong"]}, valid | {"iss": ["wrong"]},

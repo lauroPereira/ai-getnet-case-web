@@ -9,7 +9,7 @@ import base64
 import hashlib
 import hmac
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 import httpx
@@ -17,8 +17,9 @@ import httpx
 
 @dataclass(frozen=True)
 class AuthorizationAttempt:
-    state: str
-    verifier: str
+    # Kept out of repr: an attempt in a log, a traceback or a session dump never shows them.
+    state: str = field(repr=False)
+    verifier: str = field(repr=False)
     issuer: str
     redirect_uri: str
     client_id: str
