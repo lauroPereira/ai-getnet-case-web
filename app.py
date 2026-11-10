@@ -77,10 +77,16 @@ LOGIN_REFUSED = "Não foi possível entrar. Clique em Entrar e tente novamente."
 LOGIN_EXPIRED = "A tentativa de login expirou. Clique em Entrar e tente novamente."
 LOGIN_UNREACHABLE = "Backend inacessível. Confira a URL da API e se o backend está em execução."
 API_URL_CHANGED = "A URL da API mudou: a sessão anterior foi encerrada. Entre novamente."
+LOGIN_UNPAIRED = (
+    "O login só está disponível para a URL da API configurada nesta interface ({url}), a do emissor {issuer}. "
+    "Volte a essa URL para entrar."
+)
 # Login by redirection (backend v0.13.0, task 97): authorization code with PKCE S256 and a rotating refresh token.
 # AUTH_ISSUER is compared exactly with the `iss` of the redirect; AUTH_REDIRECT_URI must be registered, exactly, in the
 # backend's OAUTH_REDIRECT_URIS, and the interface must be opened at that address (the popup reaches this tab only on
-# the same origin).
+# the same origin). The issuer is paired with BACKEND_API_URL: the login is offered only at that address, so another
+# backend typed in the sidebar never receives a code and its verifier (mix-up, RFC 9207).
+BACKEND_API_URL = os.environ.get("BACKEND_API_URL", "http://localhost:8000")
 AUTH_ISSUER = os.environ.get("AUTH_ISSUER", "http://127.0.0.1:8000")
 AUTH_REDIRECT_URI = os.environ.get("AUTH_REDIRECT_URI", "http://localhost:8501/")
 OAUTH_ATTEMPT_SECONDS = 300  # an unfinished login starts over with a new state and verifier
@@ -959,8 +965,10 @@ def finish_login(attempt, callback, base_url, expired):
 
 
 def renew_tokens(base_url):
-    """Rotates the refresh token. The old one is dropped before the call and never sent again: a lost answer may mean
-    the rotation happened, and a reuse would revoke the whole login. Any failure ends the session."""
+    """Rotates the refresh token. The old one is dropped before the call and never sent again to the token endpoint: a
+    lost answer may mean the rotation happened, and a reuse would revoke the whole login. Any failure ends the session;
+    a lost answer first asks the backend, once, to revoke the login (POST /v1/auth/revoke with the access token, still
+    valid, and the old refresh token), so a rotation nobody received does not stay usable."""
     old_refresh, st.session_state.api_refresh_token = st.session_state.api_refresh_token, None
     try:
         if not old_refresh or not st.session_state.api_principal:
@@ -968,6 +976,13 @@ def renew_tokens(base_url):
         with httpx.Client(base_url=base_url.rstrip("/"), timeout=DEFAULT_TIMEOUT_SECONDS) as client:
             session = refresh(client, WEB_CLIENT_ID, old_refresh)
         install_token_response(session, base_url, expected_principal=st.session_state.api_principal)
+    except httpx.TransportError:
+        try:
+            get_session_client(st.session_state, base_url, st.session_state.api_token).logout(old_refresh)
+        except (APIError, httpx.TransportError):
+            pass  # best effort: the family expires on its own
+        finally:
+            end_session(SESSION_EXPIRED)
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         end_session(SESSION_EXPIRED)
 
@@ -1029,7 +1044,7 @@ else:
     role = st.session_state.api_role
     base_url = st.sidebar.text_input(
         "URL da API backend",
-        value=os.environ.get("BACKEND_API_URL", "http://localhost:8000"),
+        value=BACKEND_API_URL,
         # A shared (public) interface keeps the backend address fixed by the operator.
         disabled=os.environ.get("LOCK_BACKEND_URL", "").lower() in {"1", "true", "yes"},
     )
@@ -1043,18 +1058,31 @@ else:
     elif st.session_state.api_token and token_exp and time.time() >= token_exp - REFRESH_MARGIN_SECONDS:
         renew_tokens(base_url)
     role = st.session_state.api_role
-    if not st.session_state.api_token:
+    if not st.session_state.api_token and base_url.rstrip("/") != BACKEND_API_URL.rstrip("/"):
+        # Not the backend paired with AUTH_ISSUER: no attempt, so no code or verifier can reach it.
+        st.session_state.oauth_attempt = None
+        if st.session_state.login_notice:
+            st.sidebar.warning(st.session_state.login_notice)
+        st.sidebar.warning(LOGIN_UNPAIRED.format(url=BACKEND_API_URL, issuer=AUTH_ISSUER))
+    elif not st.session_state.api_token:
         if st.session_state.login_notice:
             st.sidebar.warning(st.session_state.login_notice)
         context = (base_url, AUTH_ISSUER, AUTH_REDIRECT_URI, WEB_CLIENT_ID)
         if st.session_state.get("oauth_attempt") is None or st.session_state.get("oauth_context") != context:
             start_login_attempt(context)
         attempt = st.session_state.oauth_attempt
+        age = time.monotonic() - st.session_state.oauth_started
         with st.sidebar:
-            callback = login_popup(attempt.authorization_url(base_url.rstrip("/") + "/v1/auth/authorize"), attempt.state)
-        expired = time.monotonic() - st.session_state.oauth_started > OAUTH_ATTEMPT_SECONDS
+            callback = login_popup(
+                attempt.authorization_url(base_url.rstrip("/") + "/v1/auth/authorize"),
+                attempt.state,
+                expires_in=max(0.0, OAUTH_ATTEMPT_SECONDS - age),
+            )
+        expired = age > OAUTH_ATTEMPT_SECONDS
         if callback is not None:
             # The attempt is spent before any network call, whatever the outcome; the next run starts a new one.
+            # The button of a tab left open past the deadline asks for a new attempt instead of opening the popup.
+            expired = expired or (isinstance(callback, dict) and callback.get("expired") is True)
             st.session_state.oauth_attempt = None
             st.session_state.login_notice = finish_login(attempt, callback, base_url, expired)
             st.rerun()

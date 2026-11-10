@@ -177,7 +177,7 @@ def refused():
     return httpx.HTTPStatusError("invalid_grant", request=request, response=httpx.Response(400, request=request))
 
 
-def fake_login_window(_url, state):
+def fake_login_window(_url, state, expires_in=None):
     """Stands for getnet_web.oauth_bridge.login_popup: the redirect of a successful login at the issuer."""
     if not PENDING_LOGINS:
         return None

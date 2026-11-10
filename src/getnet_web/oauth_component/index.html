@@ -22,9 +22,16 @@ window.addEventListener("message", event => {
     // Another tab's login is not this tab's business: only the redirect for this attempt goes to the server,
     // which validates it again.
     const expected = new URL(args.url).searchParams.get("state");
+    // The deadline is counted from this render in the browser's own clock: a tab left open past it asks the server
+    // for a new attempt instead of opening the login with a stale state and verifier.
+    const deadline = Date.now() + args.expires_in_ms;
     const button = document.getElementById("login");
     button.hidden = false;
     button.onclick = () => {
+      if (Date.now() >= deadline) {
+        send("streamlit:setComponentValue", {value: {expired: true}, dataType: "json"});
+        return;
+      }
       const popup = window.open(args.url, "getnet_login", "popup,width=520,height=720");
       if (!popup) document.getElementById("notice").textContent = "Permita janelas de login neste navegador.";
     };

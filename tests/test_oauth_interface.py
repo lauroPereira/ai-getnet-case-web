@@ -58,10 +58,12 @@ class LoginWindow:
 
     def __init__(self):
         self.urls: list[str] = []
+        self.expires: list[float] = []
         self.next = None
 
-    def __call__(self, url, state):
+    def __call__(self, url, state, expires_in):
         self.urls.append(url)
+        self.expires.append(expires_in)
         build, self.next = self.next, None
         return None if build is None else build(state)
 
@@ -132,6 +134,7 @@ def test_a_valid_redirect_installs_the_tokens_and_none_reaches_the_page(flow):
         "code_challenge_method": "S256", "state": attempt.state,
     }
     assert attempt.verifier not in window.urls[-1]  # only the challenge leaves the server
+    assert attempt.verifier not in repr(app.session_state) and attempt.state not in repr(app.session_state)
 
     window.redirect()
     app.run()
@@ -195,6 +198,21 @@ def test_a_refused_or_unreachable_exchange_keeps_the_login_screen(flow):
     assert any("Backend inacessível" in str(item.value) for item in app.sidebar.warning)
 
 
+def test_the_button_knows_the_deadline_and_a_late_click_asks_for_a_new_attempt(flow):
+    issuer, window, *_ = flow
+    app = real_app()
+    assert 299 <= window.expires[-1] <= 300
+    first = app.session_state["oauth_attempt"]
+    app.session_state["oauth_started"] = time.monotonic() - 200
+    app.run()
+    assert 99 <= window.expires[-1] <= 100 and app.session_state["oauth_attempt"] is first
+    window.next = lambda state: {"expired": True}  # what the component sends when clicked after the deadline
+    app.run()
+    assert issuer.requests == [] and app.session_state["api_token"] is None
+    assert app.session_state["oauth_attempt"].state != first.state
+    assert any("expirou" in str(item.value) for item in app.sidebar.warning)
+
+
 def test_an_unfinished_attempt_is_renewed_after_five_minutes(flow):
     issuer, window, *_ = flow
     app = real_app()
@@ -234,18 +252,19 @@ def test_the_refresh_rotates_and_sends_the_old_token_once(flow):
 
 
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "revoked"),
     [
-        httpx.ReadTimeout("lost answer"),  # the rotation may have happened: the old token is not sent again
-        httpx.ConnectError("backend down"),
-        httpx.Response(400, json={"error": "invalid_grant", "error_description": "x"}),
-        httpx.Response(200, json={"access_token": "only-an-access-token"}),  # outside the contract
-        httpx.Response(200, text="<html>proxy</html>"),
+        # a lost answer: the rotation may have happened, so the login is revoked once (not at the token endpoint)
+        (httpx.ReadTimeout("lost answer"), ["refresh-1"]),
+        (httpx.ConnectError("backend down"), ["refresh-1"]),
+        (httpx.Response(400, json={"error": "invalid_grant", "error_description": "x"}), []),
+        (httpx.Response(200, json={"access_token": "only-an-access-token"}), []),  # outside the contract
+        (httpx.Response(200, text="<html>proxy</html>"), []),
     ],
     ids=["timeout", "unreachable", "invalid-grant", "no-refresh-token", "not-json"],
 )
-def test_a_failed_refresh_ends_the_session_without_reusing_the_token(flow, answer):
-    issuer, *_ = flow
+def test_a_failed_refresh_ends_the_session_without_reusing_the_token(flow, answer, revoked):
+    issuer, _, assistant, sessions = flow
     app = signed_in(flow)
     issuer.answers.append(answer)
     app.session_state["api_token_exp"] = time.time() - 1
@@ -256,6 +275,24 @@ def test_a_failed_refresh_ends_the_session_without_reusing_the_token(flow, answe
     for _ in range(2):
         app.run()
     assert issuer.grants() == ["authorization_code", "refresh_token"]
+    assert assistant.revoked_refresh == revoked and all(url == BASE_URL for url in sessions)
+
+
+def test_an_interrupted_refresh_never_sends_the_old_token_again(flow):
+    """The old refresh token leaves the session before the call: even a failure outside the handled ones (the run
+    stops between the call and the installation) cannot leave it there to be sent a second time."""
+    issuer, *_ = flow
+    app = signed_in(flow)
+    issuer.answers.append(RuntimeError("run interrupted"))
+    app.session_state["api_token_exp"] = time.time() - 1
+    app.run()
+    assert app.exception  # the unexpected failure surfaces, the session state is what it was at that point
+    assert app.session_state["api_refresh_token"] is None
+    for _ in range(2):
+        app.run()
+    assert sum(request.get("refresh_token") == ["refresh-1"] for request in issuer.requests) == 1
+    assert issuer.grants() == ["authorization_code", "refresh_token"]
+    assert app.session_state["api_token"] is None and app.session_state["api_refresh_token"] is None
 
 
 def test_a_refresh_for_another_principal_ends_the_session(flow):
@@ -282,7 +319,36 @@ def test_another_backend_address_ends_the_session_and_revokes_it_where_it_was_is
     assert app.session_state["api_token"] is None and not app.tabs
     assert app.session_state["conversation_owner"] is None
     assert any("URL da API mudou" in str(item.value) for item in app.sidebar.warning)
-    assert window.urls[-1].startswith(f"{other}/v1/auth/authorize?")  # the next login goes to the new backend
+    assert all(url.startswith(f"{BASE_URL}/v1/auth/authorize?") for url in window.urls)  # no login at the new one
+
+
+def test_the_login_is_offered_only_at_the_backend_paired_with_the_issuer(flow):
+    """Mix-up (RFC 9207): another backend typed in the sidebar could relay the authorize request to the real issuer
+    and receive the code and the verifier at its token endpoint. No attempt is made for it."""
+    issuer, window, *_ = flow
+    app = real_app()
+    calls = len(window.urls)
+    window.redirect()  # even a redirect waiting in the browser has no attempt to answer
+    next(item for item in app.text_input if item.label == URL_LABEL).set_value("http://hostile.example:8000").run()
+    assert not app.exception
+    assert len(window.urls) == calls and app.session_state["oauth_attempt"] is None
+    assert issuer.requests == [] and app.session_state["api_token"] is None
+    assert any("só está disponível" in str(item.value) and BASE_URL in str(item.value) for item in app.sidebar.warning)
+    window.next = None
+    next(item for item in app.text_input if item.label == URL_LABEL).set_value(BASE_URL).run()
+    assert window.urls[-1].startswith(f"{BASE_URL}/v1/auth/authorize?") and app.session_state["oauth_attempt"]
+
+
+def test_the_compose_issuer_is_paired_with_the_default_address(flow, monkeypatch):
+    issuer, window, *_ = flow
+    monkeypatch.setenv("AUTH_ISSUER", "http://api:8000")  # the backend's JWT_ISSUER under docker compose
+    app = real_app()
+    window.redirect()  # iss of the local default: refused
+    app.run()
+    assert issuer.requests == [] and app.session_state["api_token"] is None
+    window.redirect(iss=["http://api:8000"])
+    app.run()
+    assert not app.exception and issuer.grants() == ["authorization_code"] and app.session_state["api_token"]
 
 
 def test_logout_revokes_the_access_token_and_the_refresh_family():
