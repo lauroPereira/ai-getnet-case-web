@@ -15,16 +15,20 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 AUTHORIZE_PATH = "/v1/auth/authorize"
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")  # the backend's rule for OAUTH_REDIRECT_URIS
 
 
 def authorization_endpoint(api_url: str, public_url: str = "") -> str:
     """The login page the browser opens: `public_url` (AUTH_AUTHORIZE_URL, the tunnel's single origin) when set, else
-    the API's own. Only the browser goes there; the server keeps exchanging, renewing and revoking at `api_url`."""
+    the API's own. Only the browser goes there; the server keeps exchanging, renewing and revoking at `api_url`.
+    `public_url` is absolute, https (http only on the loopback), without credentials, query or fragment."""
     if not public_url:
         return api_url.rstrip("/") + AUTHORIZE_PATH
     parts = urlsplit(public_url)
-    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment or parts.username:
-        raise ValueError("AUTH_AUTHORIZE_URL must be an absolute http(s) URL without query, fragment or credentials")
+    secure = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS)
+    if not secure or not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+        raise ValueError("AUTH_AUTHORIZE_URL must be an absolute https URL (http only on the loopback) without "
+                         "credentials, query or fragment")
     return public_url
 
 

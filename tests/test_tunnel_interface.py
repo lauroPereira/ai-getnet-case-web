@@ -85,7 +85,15 @@ def test_the_public_login_is_still_offered_only_at_the_paired_backend(tunnel):
 
 
 @pytest.mark.parametrize(
-    "value", ["/v1/auth/authorize", "javascript:alert(1)", f"{PUBLIC_AUTHORIZE}?x=1", "https://user@demo.example/a"]
+    "value",
+    [
+        "/v1/auth/authorize",
+        "javascript:alert(1)",
+        f"{PUBLIC_AUTHORIZE}?x=1",
+        "https://user@demo.example/a",
+        "https://:pw@demo.example/a",  # a password without a user name is still credentials
+        "http://demo-tunnel.example/v1/auth/authorize",  # plain http only on the loopback
+    ],
 )
 def test_an_invalid_public_address_offers_no_login(tunnel, monkeypatch, value):
     issuer, window, *_ = tunnel
@@ -100,6 +108,12 @@ def test_authorization_endpoint():
     assert authorization_endpoint("http://localhost:8000/") == "http://localhost:8000/v1/auth/authorize"
     assert authorization_endpoint("http://localhost:8000", "") == "http://localhost:8000/v1/auth/authorize"
     assert authorization_endpoint("http://localhost:8000", PUBLIC_AUTHORIZE) == PUBLIC_AUTHORIZE
-    for value in ("v1/auth/authorize", "ftp://demo.example/x", "https://", f"{PUBLIC_AUTHORIZE}#x"):
+    for loopback in ("http://localhost:8080/v1/auth/authorize", "http://127.0.0.1:8080/v1/auth/authorize",
+                     "http://[::1]:8080/v1/auth/authorize"):  # the proxy on this host, without the tunnel
+        assert authorization_endpoint("http://localhost:8000", loopback) == loopback
+    for value in ("v1/auth/authorize", "ftp://demo.example/x", "https://", f"{PUBLIC_AUTHORIZE}#x",
+                  "https://:pw@demo.example/a", "https://user:pw@demo.example/a", "https://@demo.example/a",
+                  "http://demo.example/v1/auth/authorize", "http://192.168.0.10:8080/v1/auth/authorize",
+                  "http://localhost.demo.example/v1/auth/authorize"):
         with pytest.raises(ValueError):
             authorization_endpoint("http://localhost:8000", value)

@@ -68,7 +68,7 @@ Errors show what happened and the recovery action (refresh by GET, wait, start a
 | `AUTH_CLIENT_ID` | `merchant-assistant-web` | Public client registered in the backend |
 | `AUTH_ISSUER` | `http://127.0.0.1:8000` | The backend's `JWT_ISSUER`, compared exactly with the `iss` of the redirect (`http://api:8000` with the backend's `docker compose`) |
 | `AUTH_REDIRECT_URI` | `http://localhost:8501/` | This interface's address, registered exactly in the backend's `OAUTH_REDIRECT_URIS` |
-| `AUTH_AUTHORIZE_URL` | empty (`BACKEND_API_URL` + `/v1/auth/authorize`) | Public address of the backend's login page, opened by the browser; set it behind the demonstration tunnel. The code exchange, renewal and logout always use `BACKEND_API_URL` |
+| `AUTH_AUTHORIZE_URL` | empty (`BACKEND_API_URL` + `/v1/auth/authorize`) | Public address of the backend's login page, opened by the browser; set it behind the demonstration tunnel (https, or http on the loopback; no credentials, query or fragment; an invalid value offers no login). The code exchange, renewal and logout always use `BACKEND_API_URL` |
 | `BACKEND_MESSAGE_TIMEOUT_SECONDS` | `105` | Calls that wait for paid work (message, Router comparison, evaluation, candidate build/test): backend `MAX_REQUEST_SECONDS` (90) plus a margin |
 
 
