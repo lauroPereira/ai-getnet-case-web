@@ -15,6 +15,7 @@ from streamlit.testing.v1 import AppTest
 
 from getnet_web import oauth
 from getnet_web.api import APIClient, APIError
+from getnet_web.api import token_claims as real_token_claims
 
 from .test_interface import ROOT
 from .test_v070_interface import BASE_URL, ISSUER, FakeAssistant, make_token, texts
@@ -35,6 +36,7 @@ class Issuer:
         self.answers: list = []
         self.issued = 0
         self.during: list = []  # callables run, once each, while a request is being answered
+        self.access: list[str] = []  # the access tokens issued, each one distinct
 
     def handle(self, request):
         assert request.url.path == "/v1/auth/token"
@@ -48,8 +50,9 @@ class Issuer:
                 raise answer
             return answer
         self.issued += 1
+        self.access.append(make_token(self.role, self.sub, exp_in=3600 + self.issued))
         return httpx.Response(200, json={
-            "access_token": make_token(self.role, self.sub), "token_type": "Bearer", "expires_in": 3600,
+            "access_token": self.access[-1], "token_type": "Bearer", "expires_in": 3600,
             "scope": "support:read", "refresh_token": f"refresh-{self.issued}",
         })
 
@@ -167,6 +170,7 @@ def test_a_valid_redirect_installs_the_tokens_and_none_reaches_the_page(flow):
     }]
     assert app.session_state["api_refresh_token"] == "refresh-1"
     assert app.session_state["api_principal"] == "merchant:cliente1988"
+    assert app.session_state["oauth_outcome"] == {"status": "installed"}  # the answer is not kept once installed
     assert [tab.label for tab in app.tabs] == ["Atendimento", "Resultados"]
     shown = all_texts(app)
     for secret in (app.session_state["api_token"], "refresh-1", "code-1", attempt.verifier):
@@ -231,6 +235,150 @@ def test_the_token_calls_hold_the_session_lock(flow):
     lock = app.session_state["token_lock"]
     assert lock.acquire(blocking=False)  # released once the run is over
     lock.release()
+
+
+def url_changed_meanwhile(app, url):
+    """The widget states of a browser that confirmed another backend address while a token call was running: the
+    rerun it asks for carries them."""
+    field = next(item for item in app.text_input if item.label == URL_LABEL)
+    previous = field.value
+    field.set_value(url)
+    states = app._tree.get_widget_states()
+    field.set_value(previous)
+    return lambda: get_script_run_ctx().script_requests.request_rerun(RerunData(widget_states=states))
+
+
+def test_another_address_confirmed_during_the_refresh_revokes_the_rotation_where_it_was_issued(flow):
+    """P2-1 of the review: the rotated tokens are installed and then, since the address changed, revoked at the
+    backend that issued them; the new address never receives them."""
+    issuer, _, assistant, sessions = flow
+    app = signed_in(flow)
+    issuer.during.append(url_changed_meanwhile(app, "http://hostile.example:8000"))
+    app.session_state["api_token_exp"] = time.time() - 1
+    app.run()
+    assert not app.exception
+    assert issuer.grants() == ["authorization_code", "refresh_token"]
+    assert assistant.revoked_refresh == ["refresh-2"] and set(sessions) == {BASE_URL}
+    assert app.session_state["api_token"] is None and app.session_state["token_rotation"] == {}
+    assert any("URL da API mudou" in str(item.value) for item in app.sidebar.warning)
+
+
+def test_another_address_confirmed_during_the_code_exchange_revokes_the_login(flow):
+    """P3-1 of the review: the exchanged login is installed for the backend that issued it and revoked there; going
+    back to that address starts a new attempt, with no login left behind."""
+    issuer, window, assistant, sessions = flow
+    app = real_app()
+    issuer.during.append(url_changed_meanwhile(app, "http://hostile.example:8000"))
+    window.redirect()
+    app.run()
+    assert not app.exception and issuer.grants() == ["authorization_code"]
+    assert assistant.revoked_refresh == ["refresh-1"] and set(sessions) == {BASE_URL}
+    assert app.session_state["api_token"] is None and app.session_state["oauth_outcome"] is None
+    next(item for item in app.text_input if item.label == URL_LABEL).set_value(BASE_URL).run()
+    assert app.session_state["oauth_outcome"] == {"status": "idle"} and not app.session_state["api_token"]
+
+
+def test_without_the_lock_a_run_touches_no_token_state(flow, monkeypatch):
+    """P3-2 of the review: if another run keeps the token lock past the limit, this run says so and stops."""
+    issuer, *_ = flow
+    app = signed_in(flow)
+    monkeypatch.setattr("getnet_web.api.DEFAULT_TIMEOUT_SECONDS", -9.8)  # TOKEN_LOCK_SECONDS becomes 0.2 s
+    lock = app.session_state["token_lock"]
+    assert lock.acquire(blocking=False)
+    try:
+        app.session_state["api_token_exp"] = time.time() - 1  # a refresh is due
+        app.run()
+        assert not app.exception
+        assert issuer.grants() == ["authorization_code"] and app.session_state["api_refresh_token"] == "refresh-1"
+        assert any("ainda está concluindo" in str(item.value) for item in app.sidebar.warning) and not app.tabs
+    finally:
+        lock.release()
+    app.run()
+    assert issuer.grants() == ["authorization_code", "refresh_token"] and app.tabs
+
+
+def test_without_the_lock_an_exchange_in_flight_is_left_alone(flow, monkeypatch):
+    issuer, window, *_ = flow
+    app = real_app()
+    monkeypatch.setattr("getnet_web.api.DEFAULT_TIMEOUT_SECONDS", -9.8)
+    attempt, outcome = app.session_state["oauth_attempt"], app.session_state["oauth_outcome"]
+    outcome["status"] = "exchanging"  # what another run, still waiting for the token endpoint, left
+    lock = app.session_state["token_lock"]
+    assert lock.acquire(blocking=False)
+    try:
+        window.redirect()
+        app.run()
+        assert outcome == {"status": "exchanging"} and app.session_state["oauth_attempt"] is attempt
+        assert issuer.requests == [] and not app.exception
+    finally:
+        lock.release()
+
+
+def interrupt_inside_install(monkeypatch, after):
+    """Stops the run (as a rerun request does) at the yield point number `after` + 1 counted from the start of
+    install_token_response: the next run must finish the installation, never leave half a session."""
+    armed = [True]
+
+    def claims(token):
+        if armed[0]:
+            armed[0] = False
+            ctx = get_script_run_ctx()
+            state, original, count = ctx.session_state, ctx.session_state._yield_callback, [0]
+
+            def callback():
+                count[0] += 1
+                if count[0] > after:
+                    object.__setattr__(state, "_yield_callback", original)
+                    ctx.script_requests.request_rerun(RerunData())
+                original()
+
+            object.__setattr__(state, "_yield_callback", callback)
+        return real_token_claims(token)
+
+    monkeypatch.setattr("getnet_web.api.token_claims", claims)
+
+
+@pytest.mark.parametrize("after", range(14))
+def test_a_login_stopped_inside_the_installation_is_completed(flow, monkeypatch, after):
+    issuer, window, *_ = flow
+    app = real_app()
+    # the same principal comes back (an expiry): no conversation to drop, so the yield points counted are the writes
+    app.session_state["conversation_owner"] = "merchant:cliente1988"
+    interrupt_inside_install(monkeypatch, after)
+    window.redirect()
+    app.run()
+    assert not app.exception and issuer.grants() == ["authorization_code"]
+    assert app.session_state["api_token"] == issuer.access[-1] and app.session_state["api_refresh_token"] == "refresh-1"
+    assert app.session_state["api_base_url"] == BASE_URL
+    assert app.session_state["api_principal"] == "merchant:cliente1988"
+    assert app.session_state["oauth_outcome"] == {"status": "installed"} and app.tabs
+
+
+@pytest.mark.parametrize("after", range(10))
+def test_a_refresh_stopped_inside_the_installation_is_completed(flow, monkeypatch, after):
+    issuer, *_ = flow
+    app = signed_in(flow)
+    interrupt_inside_install(monkeypatch, after)
+    app.session_state["api_token_exp"] = time.time() - 1
+    app.run()
+    assert not app.exception and issuer.grants() == ["authorization_code", "refresh_token"]
+    assert app.session_state["api_refresh_token"] == "refresh-2" and app.session_state["api_base_url"] == BASE_URL
+    assert app.session_state["api_token"] == issuer.access[-1] != issuer.access[0]  # the rotated access token
+    assert app.session_state["api_token_exp"] > time.time() + 3000
+    assert app.session_state["token_rotation"] == {"status": "installed"} and app.tabs
+
+
+def test_an_unexpected_error_during_the_exchange_spends_the_attempt(flow):
+    """The attempt leaves the idle status before the call: the same redirect, delivered again after an unexpected
+    error, is not exchanged a second time."""
+    issuer, window, *_ = flow
+    app = real_app()
+    issuer.answers.append(RuntimeError("unexpected"))
+    window.redirect(times=2)
+    app.run()
+    assert app.exception
+    app.run()
+    assert issuer.grants() == ["authorization_code"] and app.session_state["api_token"] is None
 
 
 def test_a_new_notice_replaces_the_previous_one(flow):
@@ -341,6 +489,7 @@ def test_the_refresh_rotates_and_sends_the_old_token_once(flow):
     }
     assert app.session_state["api_refresh_token"] == "refresh-2"
     assert app.session_state["api_token_exp"] > time.time() + 3000  # the new access token's expiry
+    assert app.session_state["token_rotation"] == {"status": "installed"}  # not kept once installed
     assert [tab.label for tab in app.tabs] == ["Atendimento", "Resultados"]
     for _ in range(2):
         app.run()
@@ -483,9 +632,14 @@ def test_logout_answered_401(refresh_token, confirmed):
 def test_logout_on_the_screen_sends_the_refresh_token(flow):
     _, _, assistant, _ = flow
     app = signed_in(flow)
+    app.session_state["api_token_exp"] = time.time() - 1
+    app.run()  # a rotation first, so both holders were used
+    assert app.session_state["token_rotation"] == {"status": "installed"}
     app.button(key="logout").click().run()
-    assert assistant.revoked_refresh == ["refresh-1"]
+    assert assistant.revoked_refresh == ["refresh-2"]
     assert app.session_state["api_token"] is None and app.session_state["api_refresh_token"] is None
+    assert app.session_state["token_rotation"] == {}
+    assert app.session_state["oauth_outcome"] == {"status": "idle"}  # the next attempt, nothing of the last login
 
 
 # --- the redirect page (the popup) ---------------------------------------------------------------------------------------

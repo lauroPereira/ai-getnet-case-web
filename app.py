@@ -79,6 +79,7 @@ LOGIN_REFUSED = "Não foi possível entrar. Clique em Entrar e tente novamente."
 LOGIN_EXPIRED = "A tentativa de login expirou. Clique em Entrar e tente novamente."
 LOGIN_UNREACHABLE = "Backend inacessível. Confira a URL da API e se o backend está em execução."
 API_URL_CHANGED = "A URL da API mudou: a sessão anterior foi encerrada. Entre novamente."
+SESSION_BUSY = "A sessão ainda está concluindo um login ou uma renovação. Aguarde alguns segundos e tente de novo."
 LOGIN_UNPAIRED = (
     "O login só está disponível para a URL da API configurada nesta interface ({url}), a do emissor {issuer}. "
     "Volte a essa URL para entrar."
@@ -728,6 +729,7 @@ def end_session(notice=None, forget=False):
         st.session_state[key] = None
     st.session_state.token_rotation = {}
     st.session_state.oauth_attempt = None  # the next login starts a new attempt
+    st.session_state.oauth_outcome = None
     if forget:
         forget_conversation()
     st.session_state.login_notice = notice
@@ -933,13 +935,16 @@ TOKEN_LOCK_SECONDS = DEFAULT_TIMEOUT_SECONDS + 10  # longer than any token call;
 
 @contextmanager
 def token_flow():
+    """Holds the session's token lock for the token steps of this run. If another run keeps it past the limit, this
+    run touches no token state (it could spend or orphan a login): it says so and stops."""
     lock = st.session_state.token_lock
-    acquired = lock.acquire(timeout=TOKEN_LOCK_SECONDS)
+    if not lock.acquire(timeout=TOKEN_LOCK_SECONDS):
+        st.sidebar.warning(SESSION_BUSY)
+        st.stop()
     try:
         yield
     finally:
-        if acquired:
-            lock.release()
+        lock.release()
 
 
 def install_token_response(session, base_url, *, expected_principal=None, received=None):
@@ -1010,17 +1015,22 @@ def exchange_once(outcome, attempt, callback, base_url, expired):
             outcome.update(status="failed", notice=LOGIN_REFUSED)
 
 
+def install_login(outcome):
+    """Installs a login kept in `outcome`, for the backend that issued it (the address the code was exchanged at)."""
+    try:
+        install_token_response(outcome["response"], outcome["base_url"], received=outcome)
+    except (ValueError, KeyError, TypeError):
+        outcome.clear()
+        outcome.update(status="failed", notice=LOGIN_REFUSED)
+
+
 def settle_login(outcome):
     """Applies the outcome of the attempt, kept by this run or by one that a rerun stopped: opens the session or
     leaves the notice, then starts over. Every step is safe to repeat."""
-    notice = outcome.get("notice") or LOGIN_REFUSED
     if outcome.get("status") == "done":
-        try:
-            install_token_response(outcome["response"], outcome["base_url"], received=outcome)
-            notice = None
-        except (ValueError, KeyError, TypeError):
-            notice = LOGIN_REFUSED
-    st.session_state.login_notice = notice
+        install_login(outcome)
+    installed = outcome.get("status") == "installed"
+    st.session_state.login_notice = None if installed else (outcome.get("notice") or LOGIN_REFUSED)
     st.session_state.oauth_attempt = None
     st.rerun()
 
@@ -1084,11 +1094,16 @@ def logout_and_end(base_url, notice=None):
 def session_sidebar(base_url):
     """The session part of the sidebar in Real (API) mode: a kept rotation, another backend address, the renewal, the
     login by redirection and the logout. Runs under token_flow()."""
-    token_exp = st.session_state.api_token_exp
+    # First, tokens a stopped run kept: installed for the backend that issued them, before any other check. Then
+    # every check below sees them; in particular another backend address revokes them where they were issued.
     rotation = st.session_state.token_rotation
     if rotation.get("response"):
-        finish_rotation(rotation)  # kept by a run that a rerun stopped before installing it
-    elif st.session_state.api_token and st.session_state.api_base_url != base_url:
+        finish_rotation(rotation)
+    outcome = st.session_state.get("oauth_outcome")
+    if not st.session_state.api_token and outcome and outcome.get("status") == "done":
+        install_login(outcome)
+    token_exp = st.session_state.api_token_exp
+    if st.session_state.api_token and st.session_state.api_base_url != base_url:
         # The tokens belong to the backend that issued them: revoked there, never sent to the new address.
         if st.session_state.api_base_url:
             logout_and_end(st.session_state.api_base_url, API_URL_CHANGED)
