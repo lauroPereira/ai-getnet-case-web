@@ -28,7 +28,7 @@ Choose **Simulado** for a fully local fixture flow, **Gravado** to replay a save
 
 
 
-The access and refresh tokens stay in the Streamlit session on the server and are never shown. The access token is renewed 30 seconds before it expires; the old refresh token is sent once and never retried, so a failed or lost renewal, or one that answers for another principal, ends the session (a lost one is first revoked with the old refresh token). Changing the backend URL ends the session and revokes it at the backend that issued it. **Encerrar sessão** revokes the access token and the whole login (its refresh family); if the backend does not confirm it, the screen says so. Provider keys are never entered in this interface.
+The access and refresh tokens stay in the Streamlit session on the server and are never shown. The access token is renewed 30 seconds before it expires; the old refresh token is sent once and never retried, so a failed or lost renewal, or one that answers for another principal, ends the session (for a lost one the interface first tries, once, to revoke the login with the old refresh token; this only works while the access token is still valid, so after a long idle period the unreceived rotation stays valid until the refresh token expires). Changing the backend URL ends the session and revokes it at the backend that issued it. **Encerrar sessão** revokes the access token and the whole login (its refresh family); if the backend does not confirm it, the screen says so. Provider keys are never entered in this interface.
 
 
 

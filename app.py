@@ -967,8 +967,10 @@ def finish_login(attempt, callback, base_url, expired):
 def renew_tokens(base_url):
     """Rotates the refresh token. The old one is dropped before the call and never sent again to the token endpoint: a
     lost answer may mean the rotation happened, and a reuse would revoke the whole login. Any failure ends the session;
-    a lost answer first asks the backend, once, to revoke the login (POST /v1/auth/revoke with the access token, still
-    valid, and the old refresh token), so a rotation nobody received does not stay usable."""
+    a lost answer first asks the backend, once, to revoke the login (POST /v1/auth/revoke with the access token and the
+    old refresh token). That revocation only takes effect while the access token is still valid: after its expiry
+    (a tab left idle) the backend answers 401, nothing is revoked, and the rotation nobody received stays usable until
+    the refresh token expires."""
     old_refresh, st.session_state.api_refresh_token = st.session_state.api_refresh_token, None
     try:
         if not old_refresh or not st.session_state.api_principal:
