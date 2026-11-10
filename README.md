@@ -60,24 +60,31 @@ Errors show what happened and the recovery action (refresh by GET, wait, start a
 
 
 | Variable | Default | Meaning |
-
 | --- | --- | --- |
-
 | `BACKEND_API_URL` | `http://localhost:8000` | Backend address shown in Real (API) mode |
-
 | `LOCK_BACKEND_URL` | empty | `true` keeps the backend address fixed (use it when the interface is shared) |
-
 | `BACKEND_TIMEOUT_SECONDS` | `20` | Reads and administrative calls |
-
 | `TICKETING_URL` | `http://127.0.0.1:8002` | Ticketing service used by the operator's Ticketing area |
 | `AUTH_CLIENT_ID` | `merchant-assistant-web` | Public client registered in the backend |
 | `AUTH_ISSUER` | `http://127.0.0.1:8000` | The backend's `JWT_ISSUER`, compared exactly with the `iss` of the redirect (`http://api:8000` with the backend's `docker compose`) |
 | `AUTH_REDIRECT_URI` | `http://localhost:8501/` | This interface's address, registered exactly in the backend's `OAUTH_REDIRECT_URIS` |
+| `AUTH_AUTHORIZE_URL` | empty (`BACKEND_API_URL` + `/v1/auth/authorize`) | Public address of the backend's login page, opened by the browser; set it behind the demonstration tunnel. The code exchange, renewal and logout always use `BACKEND_API_URL` |
 | `BACKEND_MESSAGE_TIMEOUT_SECONDS` | `105` | Calls that wait for paid work (message, Router comparison, evaluation, candidate build/test): backend `MAX_REQUEST_SECONDS` (90) plus a margin |
 
 
 
 To share the interface, run `streamlit run app.py --server.address 0.0.0.0 --server.port 8501` (add `--server.sslCertFile` and `--server.sslKeyFile` for HTTPS) with the backend API kept on `127.0.0.1`. Since v0.13.0 the login popup opens the backend's `/v1/auth/authorize` in the user's browser, so remote users also need that page reachable at `BACKEND_API_URL` (for example behind the same HTTPS proxy), and the interface's public `https` address must be in `AUTH_REDIRECT_URI` and in the backend's `OAUTH_REDIRECT_URIS` (plain `http` is accepted only on the loopback).
+
+The simplest way to share it is the backend's demonstration tunnel ([Open the demonstration through a tunnel](https://github.com/lauroPereira/ai-getnet-case#open-the-demonstration-through-a-tunnel)): `docker compose --profile tunnel up` starts a proxy that publishes one origin with this interface and only the backend's login page, and `cloudflared tunnel --url http://localhost:8080` gives it an ephemeral `https://<name>.trycloudflare.com` address. Start the interface with that address for the browser and the internal one for the server, and keep port 8501 closed to other machines:
+
+```bash
+export BACKEND_API_URL=http://localhost:8000 LOCK_BACKEND_URL=true AUTH_ISSUER=http://api:8000
+export AUTH_REDIRECT_URI=https://<name>.trycloudflare.com/
+export AUTH_AUTHORIZE_URL=https://<name>.trycloudflare.com/v1/auth/authorize
+streamlit run app.py
+```
+
+The browser opens the login at `AUTH_AUTHORIZE_URL` and comes back to `AUTH_REDIRECT_URI`; the code, the tokens and the logout go only to `BACKEND_API_URL`, and the login is still offered only at that paired address. The address changes at every opening and is never committed.
 
 
 
