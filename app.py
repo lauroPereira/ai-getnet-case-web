@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 
 import altair as alt
 import httpx
@@ -724,6 +726,8 @@ def end_session(notice=None, forget=False):
     close_ticketing_client(st.session_state)
     for key in (*SESSION_KEYS, *TICKET_STATE_KEYS):
         st.session_state[key] = None
+    st.session_state.token_rotation = {}
+    st.session_state.oauth_attempt = None  # the next login starts a new attempt
     if forget:
         forget_conversation()
     st.session_state.login_notice = notice
@@ -915,9 +919,34 @@ def render_ticketing(token):
     render_ticket_actions(client, detail)
 
 
-def install_token_response(session, base_url, *, expected_principal=None):
-    """Keeps the tokens of a code exchange or a refresh in this Streamlit session (never on the page). A refresh that
-    answers for another principal raises ValueError before anything is kept."""
+# When the browser asks for a rerun (a repeated delivery of the redirect, a click), Streamlit (1.66, fast reruns on
+# by default) starts a new run at once and only asks the running one to stop, which it does at its next yield point
+# (any session-state read or write, any `st` call). Two runs of the same session may therefore overlap, and a run may
+# die right after the token endpoint answered. So:
+# - the token steps of a run (refresh, code exchange, installing, logout) hold the session's `token_lock`: a new run
+#   waits there while an earlier one is still waiting for the token endpoint, instead of acting on half-written state;
+# - an answer of the token endpoint is kept, right after the call and before any yield point, in a plain dict the
+#   session already holds (`oauth_outcome`, `token_rotation`); the session state is written from it afterwards, by
+#   that run or, if it was stopped, by the next one. Installing is safe to repeat; a code is never exchanged twice.
+TOKEN_LOCK_SECONDS = DEFAULT_TIMEOUT_SECONDS + 10  # longer than any token call; never a deadlock if exceeded
+
+
+@contextmanager
+def token_flow():
+    lock = st.session_state.token_lock
+    acquired = lock.acquire(timeout=TOKEN_LOCK_SECONDS)
+    try:
+        yield
+    finally:
+        if acquired:
+            lock.release()
+
+
+def install_token_response(session, base_url, *, expected_principal=None, received=None):
+    """Keeps the tokens of a code exchange or a refresh in this Streamlit session (never on the page). `api_token` is
+    written last, and `received` (the plain dict that kept the answer) is marked installed right after it, with no
+    yield point between the two: a run stopped earlier leaves the session closed and the answer still to install. A
+    refresh that answers for another principal raises ValueError before anything is kept."""
     access, next_refresh = session.get("access_token"), session.get("refresh_token")
     if not isinstance(access, str) or not access or not isinstance(next_refresh, str) or not next_refresh:
         raise ValueError("Incomplete token response")
@@ -928,7 +957,6 @@ def install_token_response(session, base_url, *, expected_principal=None):
     if not principal or principal != st.session_state.conversation_owner:
         forget_conversation()
     st.session_state.conversation_owner = principal
-    st.session_state.api_token = access
     st.session_state.api_refresh_token = next_refresh
     st.session_state.api_role = claims.get("role")
     st.session_state.api_principal = principal
@@ -936,56 +964,108 @@ def install_token_response(session, base_url, *, expected_principal=None):
     st.session_state.api_token_exp = claims.get("exp") or (time.time() + float(expires_in) if expires_in else None)
     st.session_state.api_base_url = base_url
     st.session_state.login_notice = None
+    st.session_state.api_token = access  # last: the session is open only once everything above is kept
+    if received is not None:
+        received.clear()
+        received["status"] = "installed"
+
+
+def show_login_notice():
+    """A login notice is shown once: a newer one, or the next attempt, never appears beside it."""
+    notice = st.session_state.login_notice
+    if notice:
+        st.session_state.login_notice = None
+        st.sidebar.warning(notice)
 
 
 def start_login_attempt(context):
-    """A new state and verifier, held only by this session. The context (backend, issuer, redirect, client) is part of
-    the attempt: changing any of them starts another one."""
+    """A new state and verifier, held only by this session, and an empty outcome. The context (backend, issuer,
+    redirect, client) is part of the attempt: changing any of them starts another one."""
     _base_url, issuer, redirect_uri, client_id = context
     st.session_state.oauth_attempt = AuthorizationAttempt.create(issuer, redirect_uri, client_id)
+    st.session_state.oauth_outcome = {"status": "idle"}
     st.session_state.oauth_context = context
     st.session_state.oauth_started = time.monotonic()
 
 
-def finish_login(attempt, callback, base_url, expired):
+def exchange_once(outcome, attempt, callback, base_url, expired):
     """Validates the redirect against this session's attempt (state, iss, a single code, no error) and only then
-    exchanges the code with the verifier. Returns the notice for the login screen, or None when the session opened."""
+    exchanges the code with the verifier. It reads no session state and calls no `st` function: nothing can stop it
+    between the token endpoint's answer and the moment the answer is kept in `outcome`, and `outcome` leaves the idle
+    status before the call, so a repeated delivery of the same redirect never exchanges again."""
     if expired:
-        return LOGIN_EXPIRED
+        outcome.update(status="failed", notice=LOGIN_EXPIRED)
+        return
+    outcome["status"] = "exchanging"  # an unexpected error from here on leaves it, and the attempt is not reused
     try:
         code = attempt.validate_callback(callback)
         with httpx.Client(base_url=base_url.rstrip("/"), timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-            session = exchange_code(client, attempt, code)
-        install_token_response(session, base_url)
+            outcome.update(status="done", response=exchange_code(client, attempt, code), base_url=base_url)
     except httpx.TransportError:
-        return LOGIN_UNREACHABLE
+        outcome.update(status="failed", notice=LOGIN_UNREACHABLE)
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        return LOGIN_REFUSED
-    return None
+        outcome.update(status="failed", notice=LOGIN_REFUSED)
+    finally:
+        if outcome.get("status") == "exchanging":  # an unexpected error: the attempt is spent all the same
+            outcome.update(status="failed", notice=LOGIN_REFUSED)
 
 
-def renew_tokens(base_url):
+def settle_login(outcome):
+    """Applies the outcome of the attempt, kept by this run or by one that a rerun stopped: opens the session or
+    leaves the notice, then starts over. Every step is safe to repeat."""
+    notice = outcome.get("notice") or LOGIN_REFUSED
+    if outcome.get("status") == "done":
+        try:
+            install_token_response(outcome["response"], outcome["base_url"], received=outcome)
+            notice = None
+        except (ValueError, KeyError, TypeError):
+            notice = LOGIN_REFUSED
+    st.session_state.login_notice = notice
+    st.session_state.oauth_attempt = None
+    st.rerun()
+
+
+def renew_tokens(base_url, rotation):
     """Rotates the refresh token. The old one is dropped before the call and never sent again to the token endpoint: a
-    lost answer may mean the rotation happened, and a reuse would revoke the whole login. Any failure ends the session;
+    lost answer may mean the rotation happened, and a reuse would revoke the whole login. The answer is kept in
+    `rotation` before any yield point (see above) and installed by finish_rotation. Any failure ends the session;
     a lost answer first asks the backend, once, to revoke the login (POST /v1/auth/revoke with the access token and the
     old refresh token). That revocation only takes effect while the access token is still valid: after its expiry
     (a tab left idle) the backend answers 401, nothing is revoked, and the rotation nobody received stays usable until
     the refresh token expires."""
-    old_refresh, st.session_state.api_refresh_token = st.session_state.api_refresh_token, None
+    old_refresh, principal, access = (
+        st.session_state.api_refresh_token, st.session_state.api_principal, st.session_state.api_token
+    )
+    st.session_state.api_refresh_token = None  # from here to the kept answer there is no yield point
+    rotation.clear()
     try:
-        if not old_refresh or not st.session_state.api_principal:
+        if not old_refresh or not principal:
             raise ValueError("No refresh token or principal")
         with httpx.Client(base_url=base_url.rstrip("/"), timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-            session = refresh(client, WEB_CLIENT_ID, old_refresh)
-        install_token_response(session, base_url, expected_principal=st.session_state.api_principal)
+            rotation.update(response=refresh(client, WEB_CLIENT_ID, old_refresh), base_url=base_url, principal=principal)
     except httpx.TransportError:
         try:
-            get_session_client(st.session_state, base_url, st.session_state.api_token).logout(old_refresh)
+            get_session_client(st.session_state, base_url, access).logout(old_refresh)
         except (APIError, httpx.TransportError):
             pass  # best effort: the family expires on its own
         finally:
             end_session(SESSION_EXPIRED)
+        return
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        end_session(SESSION_EXPIRED)
+        return
+    finish_rotation(rotation)
+
+
+def finish_rotation(rotation):
+    """Installs a rotation kept by this run or by one that a rerun stopped; one for another principal ends the
+    session."""
+    try:
+        install_token_response(
+            rotation["response"], rotation["base_url"], expected_principal=rotation["principal"], received=rotation
+        )
+    except (ValueError, KeyError, TypeError):
+        rotation.clear()
         end_session(SESSION_EXPIRED)
 
 
@@ -999,6 +1079,67 @@ def logout_and_end(base_url, notice=None):
         notice = REVOKE_UNCONFIRMED
     finally:
         end_session(notice, forget=True)
+
+
+def session_sidebar(base_url):
+    """The session part of the sidebar in Real (API) mode: a kept rotation, another backend address, the renewal, the
+    login by redirection and the logout. Runs under token_flow()."""
+    token_exp = st.session_state.api_token_exp
+    rotation = st.session_state.token_rotation
+    if rotation.get("response"):
+        finish_rotation(rotation)  # kept by a run that a rerun stopped before installing it
+    elif st.session_state.api_token and st.session_state.api_base_url != base_url:
+        # The tokens belong to the backend that issued them: revoked there, never sent to the new address.
+        if st.session_state.api_base_url:
+            logout_and_end(st.session_state.api_base_url, API_URL_CHANGED)
+        else:
+            end_session(API_URL_CHANGED, forget=True)
+    elif st.session_state.api_token and token_exp and time.time() >= token_exp - REFRESH_MARGIN_SECONDS:
+        renew_tokens(base_url, rotation)
+    if not st.session_state.api_token and base_url.rstrip("/") != BACKEND_API_URL.rstrip("/"):
+        # Not the backend paired with AUTH_ISSUER: no attempt, so no code or verifier can reach it.
+        st.session_state.oauth_attempt = None
+        show_login_notice()
+        st.sidebar.warning(LOGIN_UNPAIRED.format(url=BACKEND_API_URL, issuer=AUTH_ISSUER))
+    elif not st.session_state.api_token:
+        show_login_notice()
+        context = (base_url, AUTH_ISSUER, AUTH_REDIRECT_URI, WEB_CLIENT_ID)
+        outcome = st.session_state.get("oauth_outcome")
+        if (
+            st.session_state.get("oauth_attempt") is None
+            or st.session_state.get("oauth_context") != context
+            or not outcome
+            or outcome.get("status") == "installed"
+        ):
+            start_login_attempt(context)
+        attempt, outcome = st.session_state.oauth_attempt, st.session_state.oauth_outcome
+        if outcome["status"] != "idle":
+            settle_login(outcome)  # kept by a run that a rerun stopped before applying it; never exchanged again
+        age = time.monotonic() - st.session_state.oauth_started
+        with st.sidebar:
+            callback = login_popup(
+                attempt.authorization_url(base_url.rstrip("/") + "/v1/auth/authorize"),
+                attempt.state,
+                expires_in=max(0.0, OAUTH_ATTEMPT_SECONDS - age),
+            )
+        expired = age > OAUTH_ATTEMPT_SECONDS
+        if callback is not None:
+            # The attempt is spent before any network call, whatever the outcome; the next run starts a new one.
+            # The button of a tab left open past the deadline asks for a new attempt instead of opening the popup.
+            expired = expired or (isinstance(callback, dict) and callback.get("expired") is True)
+            exchange_once(outcome, attempt, callback, base_url, expired)
+            settle_login(outcome)
+        elif expired:
+            st.session_state.oauth_attempt = None  # the button must not keep a stale state and verifier
+            st.rerun()
+    else:
+        principal = st.session_state.api_principal
+        st.sidebar.success(
+            f"Sessão ativa · papel {st.session_state.api_role}" + (f" · {principal}" if principal else "")
+        )
+        if st.sidebar.button("Encerrar sessão", key="logout"):
+            logout_and_end(base_url)
+            st.rerun()
 
 
 st.set_page_config(page_title="Getnet Merchant Assistant", page_icon="💬", layout="wide")
@@ -1025,6 +1166,8 @@ for key, default in {
     "ticket_notice": None,
     "ticket_confirm_context": None,
     "ticket_solve_confirm_context": None,
+    "token_rotation": {},
+    "token_lock": threading.Lock(),
     **conversation_defaults(),
 }.items():
     if key not in st.session_state:
@@ -1050,55 +1193,9 @@ else:
         # A shared (public) interface keeps the backend address fixed by the operator.
         disabled=os.environ.get("LOCK_BACKEND_URL", "").lower() in {"1", "true", "yes"},
     )
-    token_exp = st.session_state.api_token_exp
-    if st.session_state.api_token and st.session_state.api_base_url != base_url:
-        # The tokens belong to the backend that issued them: revoked there, never sent to the new address.
-        if st.session_state.api_base_url:
-            logout_and_end(st.session_state.api_base_url, API_URL_CHANGED)
-        else:
-            end_session(API_URL_CHANGED, forget=True)
-    elif st.session_state.api_token and token_exp and time.time() >= token_exp - REFRESH_MARGIN_SECONDS:
-        renew_tokens(base_url)
+    with token_flow():
+        session_sidebar(base_url)
     role = st.session_state.api_role
-    if not st.session_state.api_token and base_url.rstrip("/") != BACKEND_API_URL.rstrip("/"):
-        # Not the backend paired with AUTH_ISSUER: no attempt, so no code or verifier can reach it.
-        st.session_state.oauth_attempt = None
-        if st.session_state.login_notice:
-            st.sidebar.warning(st.session_state.login_notice)
-        st.sidebar.warning(LOGIN_UNPAIRED.format(url=BACKEND_API_URL, issuer=AUTH_ISSUER))
-    elif not st.session_state.api_token:
-        if st.session_state.login_notice:
-            st.sidebar.warning(st.session_state.login_notice)
-        context = (base_url, AUTH_ISSUER, AUTH_REDIRECT_URI, WEB_CLIENT_ID)
-        if st.session_state.get("oauth_attempt") is None or st.session_state.get("oauth_context") != context:
-            start_login_attempt(context)
-        attempt = st.session_state.oauth_attempt
-        age = time.monotonic() - st.session_state.oauth_started
-        with st.sidebar:
-            callback = login_popup(
-                attempt.authorization_url(base_url.rstrip("/") + "/v1/auth/authorize"),
-                attempt.state,
-                expires_in=max(0.0, OAUTH_ATTEMPT_SECONDS - age),
-            )
-        expired = age > OAUTH_ATTEMPT_SECONDS
-        if callback is not None:
-            # The attempt is spent before any network call, whatever the outcome; the next run starts a new one.
-            # The button of a tab left open past the deadline asks for a new attempt instead of opening the popup.
-            expired = expired or (isinstance(callback, dict) and callback.get("expired") is True)
-            st.session_state.oauth_attempt = None
-            st.session_state.login_notice = finish_login(attempt, callback, base_url, expired)
-            st.rerun()
-        elif expired:
-            st.session_state.oauth_attempt = None  # the button must not keep a stale state and verifier
-            st.rerun()
-    else:
-        principal = st.session_state.api_principal
-        st.sidebar.success(
-            f"Sessão ativa · papel {st.session_state.api_role}" + (f" · {principal}" if principal else "")
-        )
-        if st.sidebar.button("Encerrar sessão", key="logout"):
-            logout_and_end(base_url)
-            st.rerun()
 if mode == "Real (API)" and not st.session_state.api_token:
     st.warning("Entre pela janela de login para abrir a sessão.")
     st.stop()

@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from streamlit.runtime.scriptrunner_utils.script_requests import RerunData
+from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
 from streamlit.testing.v1 import AppTest
 
 from getnet_web import oauth
@@ -32,11 +34,14 @@ class Issuer:
         self.requests: list[dict[str, list[str]]] = []
         self.answers: list = []
         self.issued = 0
+        self.during: list = []  # callables run, once each, while a request is being answered
 
     def handle(self, request):
         assert request.url.path == "/v1/auth/token"
         assert request.headers["content-type"] == "application/x-www-form-urlencoded"
         self.requests.append(parse_qs(request.content.decode()))
+        while self.during:
+            self.during.pop(0)()
         if self.answers:
             answer = self.answers.pop(0)
             if isinstance(answer, Exception):
@@ -60,15 +65,32 @@ class LoginWindow:
         self.urls: list[str] = []
         self.expires: list[float] = []
         self.next = None
+        self.times = 1  # how many renders return the redirect (a repeated delivery returns it again)
+        self.delivered = None
 
     def __call__(self, url, state, expires_in):
         self.urls.append(url)
         self.expires.append(expires_in)
-        build, self.next = self.next, None
-        return None if build is None else build(state)
+        if self.next is None:
+            return None
+        if self.delivered is None:
+            self.delivered = self.next(state)  # a repeated delivery is the very same redirect
+        result = dict(self.delivered)
+        self.times -= 1
+        if self.times <= 0:
+            self.next, self.delivered = None, None
+        return result
 
-    def redirect(self, **params):
+    def redirect(self, times=1, **params):
+        self.times, self.delivered = times, None
         self.next = lambda state: {"code": ["code-1"], "state": [state], "iss": [ISSUER]} | params
+
+
+def rerun_requested():
+    """What the browser does when it sends a new widget value (a second delivery of the redirect, a click) while the
+    script runs: Streamlit stops the running script at its next yield point (any session-state access, any `st` call)
+    and starts it again."""
+    get_script_run_ctx().script_requests.request_rerun(RerunData())
 
 
 @pytest.fixture
@@ -149,6 +171,81 @@ def test_a_valid_redirect_installs_the_tokens_and_none_reaches_the_page(flow):
     shown = all_texts(app)
     for secret in (app.session_state["api_token"], "refresh-1", "code-1", attempt.verifier):
         assert secret not in shown
+
+
+@pytest.mark.parametrize("deliveries", [2, 1], ids=["delivered-twice", "another-rerun"])
+def test_a_rerun_during_the_code_exchange_still_opens_the_session(flow, deliveries):
+    """D1 of the v0.13.0 QA: the redirect reached the tab twice; the second delivery asked for a rerun while the first
+    run was exchanging the code, Streamlit stopped that run before the tokens were kept, and the next run, without
+    them, started a new attempt: a login opened at the backend and held by nobody. Now the answer is kept before any
+    yield point and the next run installs it; the same redirect delivered again never exchanges a second time."""
+    issuer, window, *_ = flow
+    app = real_app()
+    issuer.during.append(rerun_requested)
+    window.redirect(times=deliveries)
+    app.run()
+    assert not app.exception
+    assert issuer.grants() == ["authorization_code"]  # one exchange
+    assert app.session_state["api_token"] and app.session_state["api_refresh_token"] == "refresh-1"
+    assert [tab.label for tab in app.tabs] == ["Atendimento", "Resultados"]
+    assert not app.sidebar.warning
+    app.run()
+    assert issuer.grants() == ["authorization_code"] and app.session_state["api_refresh_token"] == "refresh-1"
+
+
+def test_a_rerun_during_the_refresh_keeps_the_rotated_tokens(flow):
+    issuer, *_ = flow
+    app = signed_in(flow)
+    issuer.during.append(rerun_requested)
+    app.session_state["api_token_exp"] = time.time() - 1
+    app.run()
+    assert not app.exception
+    assert issuer.grants() == ["authorization_code", "refresh_token"]
+    assert app.session_state["api_refresh_token"] == "refresh-2" and app.session_state["api_token"]
+    assert app.session_state["api_token_exp"] > time.time() + 3000 and app.tabs
+
+
+def lock_is_held(seen):
+    """Run while the token endpoint answers: records whether the session's token lock is held (a run started
+    meanwhile by a fast rerun waits on it)."""
+    def check():
+        lock = get_script_run_ctx().session_state["token_lock"]
+        free = lock.acquire(blocking=False)
+        if free:
+            lock.release()
+        seen.append(not free)
+    return check
+
+
+def test_the_token_calls_hold_the_session_lock(flow):
+    """Streamlit starts a rerun at once and stops the running script only at its next yield point, so two runs of a
+    session can overlap. The run that waits for the token endpoint holds the lock; another one waits for its answer."""
+    issuer, *_ = flow
+    seen = []
+    issuer.during.append(lock_is_held(seen))
+    app = signed_in(flow)
+    issuer.during.append(lock_is_held(seen))
+    app.session_state["api_token_exp"] = time.time() - 1
+    app.run()
+    assert seen == [True, True] and issuer.grants() == ["authorization_code", "refresh_token"]
+    lock = app.session_state["token_lock"]
+    assert lock.acquire(blocking=False)  # released once the run is over
+    lock.release()
+
+
+def test_a_new_notice_replaces_the_previous_one(flow):
+    """O3 of the v0.13.0 QA: a login notice is shown once, not kept beside newer ones."""
+    _, window, *_ = flow
+    app = real_app()
+    window.redirect(state=["forged-state"])
+    app.run()
+    assert [str(item.value) for item in app.sidebar.warning] == [
+        "Não foi possível entrar. Clique em Entrar e tente novamente."
+    ]
+    next(item for item in app.text_input if item.label == URL_LABEL).set_value("http://hostile.example:8000").run()
+    assert len(app.sidebar.warning) == 1 and "só está disponível" in str(app.sidebar.warning[0].value)
+    app.run()
+    assert len(app.sidebar.warning) == 1
 
 
 @pytest.mark.parametrize(
