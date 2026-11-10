@@ -20,7 +20,7 @@ from getnet_web.api import (
     session_ended,
     token_claims,
 )
-from getnet_web.oauth import AuthorizationAttempt, exchange_code, refresh
+from getnet_web.oauth import AuthorizationAttempt, authorization_endpoint, exchange_code, refresh
 from getnet_web.oauth_bridge import login_popup, return_from_popup
 from getnet_web.simulated import SimulatedAPI
 from getnet_web.ticketing import (
@@ -84,6 +84,7 @@ LOGIN_UNPAIRED = (
     "O login só está disponível para a URL da API configurada nesta interface ({url}), a do emissor {issuer}. "
     "Volte a essa URL para entrar."
 )
+LOGIN_URL_INVALID = "O endereço público de login (AUTH_AUTHORIZE_URL) é inválido. Peça ao administrador."
 # Login by redirection (backend v0.13.0, task 97): authorization code with PKCE S256 and a rotating refresh token.
 # AUTH_ISSUER is compared exactly with the `iss` of the redirect; AUTH_REDIRECT_URI must be registered, exactly, in the
 # backend's OAUTH_REDIRECT_URIS, and the interface must be opened at that address (the popup reaches this tab only on
@@ -92,6 +93,9 @@ LOGIN_UNPAIRED = (
 BACKEND_API_URL = os.environ.get("BACKEND_API_URL", "http://localhost:8000")
 AUTH_ISSUER = os.environ.get("AUTH_ISSUER", "http://127.0.0.1:8000")
 AUTH_REDIRECT_URI = os.environ.get("AUTH_REDIRECT_URI", "http://localhost:8501/")
+# Behind the demonstration tunnel (backend v1.0.0, ADR 0026) the browser reaches the login page at a public address
+# while the server keeps talking to BACKEND_API_URL. Empty: the login page of BACKEND_API_URL, as before.
+AUTH_AUTHORIZE_URL = os.environ.get("AUTH_AUTHORIZE_URL", "").strip()
 OAUTH_ATTEMPT_SECONDS = 300  # an unfinished login starts over with a new state and verifier
 REFRESH_MARGIN_SECONDS = 30  # the access token is renewed this long before it expires
 STATUS_LABELS = {"new": "Recepção", "open": "Atendimento", "pending": "Envio", "solved": "Finalização"}
@@ -1118,6 +1122,13 @@ def session_sidebar(base_url):
         st.sidebar.warning(LOGIN_UNPAIRED.format(url=BACKEND_API_URL, issuer=AUTH_ISSUER))
     elif not st.session_state.api_token:
         show_login_notice()
+        try:
+            # only the browser goes to the public address; the code, the tokens and the logout stay on base_url
+            authorize_url = authorization_endpoint(base_url, AUTH_AUTHORIZE_URL)
+        except ValueError:
+            st.session_state.oauth_attempt = None
+            st.sidebar.error(LOGIN_URL_INVALID)
+            return
         context = (base_url, AUTH_ISSUER, AUTH_REDIRECT_URI, WEB_CLIENT_ID)
         outcome = st.session_state.get("oauth_outcome")
         if (
@@ -1133,7 +1144,7 @@ def session_sidebar(base_url):
         age = time.monotonic() - st.session_state.oauth_started
         with st.sidebar:
             callback = login_popup(
-                attempt.authorization_url(base_url.rstrip("/") + "/v1/auth/authorize"),
+                attempt.authorization_url(authorize_url),
                 attempt.state,
                 expires_in=max(0.0, OAUTH_ATTEMPT_SECONDS - age),
             )

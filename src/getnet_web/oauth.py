@@ -10,9 +10,22 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass, field
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
+
+AUTHORIZE_PATH = "/v1/auth/authorize"
+
+
+def authorization_endpoint(api_url: str, public_url: str = "") -> str:
+    """The login page the browser opens: `public_url` (AUTH_AUTHORIZE_URL, the tunnel's single origin) when set, else
+    the API's own. Only the browser goes there; the server keeps exchanging, renewing and revoking at `api_url`."""
+    if not public_url:
+        return api_url.rstrip("/") + AUTHORIZE_PATH
+    parts = urlsplit(public_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment or parts.username:
+        raise ValueError("AUTH_AUTHORIZE_URL must be an absolute http(s) URL without query, fragment or credentials")
+    return public_url
 
 
 @dataclass(frozen=True)
