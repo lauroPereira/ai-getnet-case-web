@@ -341,6 +341,7 @@ def test_kb_transport_failures_never_crash_and_never_allow_a_blind_repeat(monkey
     monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: api)
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20)
     app.session_state["api_token"] = "synthetic-session"
+    app.session_state["api_base_url"] = "http://localhost:8000"  # where it was issued
     app.session_state["api_role"] = "admin"
     app.run()
     app.selectbox(key="mode").select("Real (API)").run()
@@ -435,7 +436,7 @@ def test_case_state_after_recovery_shows_the_recovered_reply(monkeypatch):  # P3
 
     monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: FakeChatAPI())
     app = _app(
-        api_token="synthetic-session",
+        api_token="synthetic-session", api_base_url="http://localhost:8000",
         api_role="demo",
         case_view={"status": "resolved", "route": "support", "state": "resolved", "protocol": None},
     )
@@ -480,7 +481,7 @@ def test_candidate_test_cap_is_prefilled_with_the_build_estimate(monkeypatch):  
             return state
 
     monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: Admin())
-    app = _app(api_token="synthetic-session", api_role="admin")
+    app = _app(api_token="synthetic-session", api_base_url="http://localhost:8000", api_role="admin")
     app.selectbox(key="mode").select("Real (API)").run()
     assert not app.exception
     assert app.number_input(key="kb_test_max_cost").value == pytest.approx(0.0012)
@@ -507,7 +508,7 @@ def test_pending_question_is_shown_literally(monkeypatch):  # P3-R4-01
             raise httpx.ReadTimeout("synthetic timeout")
 
     monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: FakeChatAPI())
-    app = _app(api_token="synthetic-session", api_role="demo")
+    app = _app(api_token="synthetic-session", api_base_url="http://localhost:8000", api_role="demo")
     app.selectbox(key="mode").select("Real (API)").run()
     app.text_area(key="message_input").set_value(TWO_AMOUNTS)
     app.button(key="send_message").click().run()

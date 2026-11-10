@@ -1,5 +1,6 @@
-"""v0.7.0 interface: login by user and password (JWT of the assistant), areas by role and the operator's Ticketing
-screen. Network-free: fake assistant and ticketing clients, and httpx.MockTransport for the real HTTP clients."""
+"""v0.7.0 interface: login (by redirection since v0.13.0, see test_oauth_interface.py), areas by role and the
+operator's Ticketing screen. Network-free: fake assistant and ticketing clients, and httpx.MockTransport for the real
+HTTP clients."""
 
 from __future__ import annotations
 
@@ -7,7 +8,6 @@ import ast
 import base64
 import json
 import time
-import urllib.parse
 
 import httpx
 import pytest
@@ -19,7 +19,9 @@ from getnet_web.ticketing import TicketingClient
 
 from .test_interface import ROOT
 
-PASSWORD = "op-ana-password-fictitious"
+BASE_URL = "http://localhost:8000"  # the interface's default backend address
+ISSUER = "http://127.0.0.1:8000"  # the interface's default AUTH_ISSUER
+PENDING_LOGINS: list[str] = []  # users whose redirect the fake login window returns on the next run
 
 
 def make_token(role="operator", sub="operator:op_ana", exp_in=3600) -> str:
@@ -31,14 +33,19 @@ def make_token(role="operator", sub="operator:op_ana", exp_in=3600) -> str:
 
 
 class FakeAssistant:
-    """Stands for the assistant API: password login, revocation, profiles and messages."""
+    """Stands for the assistant API: the issuer's token endpoint (code exchange and refresh), revocation, profiles and
+    messages. A refresh is refused unless `refresh_ok`, as when the login itself expired."""
 
     execution_mode = "real"
 
     def __init__(self, role="operator", sub="operator:op_ana", reply=None, profiles_error=None):
         self.role, self.sub, self.reply, self.profiles_error = role, sub, reply, profiles_error
-        self.logins: list[tuple[str, str]] = []
+        self.logins: list[str] = []
         self.revoked = 0
+        self.revoked_refresh: list[str | None] = []
+        self.refreshes: list[str] = []
+        self.refresh_ok = False
+        self.issued = 0
         self.posts: list[str] = []
 
     def __call__(self, *_args, **_kwargs):  # used as the APIClient factory and as get_session_client
@@ -56,12 +63,24 @@ class FakeAssistant:
     def close(self):
         return None
 
-    def login(self, username, password):
-        self.logins.append((username, password))
-        return {"access_token": make_token(self.role, self.sub), "token_type": "Bearer", "expires_in": 3600}
+    def tokens(self):
+        self.issued += 1
+        return {"access_token": make_token(self.role, self.sub), "token_type": "Bearer", "expires_in": 3600,
+                "scope": "support:read", "refresh_token": f"refresh-synthetic-{self.issued}"}
 
-    def logout(self):
+    def exchange_code(self, _client, _attempt, code):  # stands for getnet_web.oauth.exchange_code
+        self.logins.append(code.removeprefix("code-"))
+        return self.tokens()
+
+    def refresh(self, _client, _client_id, refresh_token):  # stands for getnet_web.oauth.refresh
+        self.refreshes.append(refresh_token)
+        if not self.refresh_ok:
+            raise refused()
+        return self.tokens()
+
+    def logout(self, refresh_token=None):
         self.revoked += 1
+        self.revoked_refresh.append(refresh_token)
 
     def profiles(self):
         if self.profiles_error:
@@ -152,11 +171,30 @@ class FakeTicketing:
         return self._delivered(ticket_id)
 
 
+def refused():
+    """What getnet_web.oauth raises for a 400 invalid_grant of the token endpoint."""
+    request = httpx.Request("POST", f"{BASE_URL}/v1/auth/token")
+    return httpx.HTTPStatusError("invalid_grant", request=request, response=httpx.Response(400, request=request))
+
+
+def fake_login_window(_url, state, expires_in=None):
+    """Stands for getnet_web.oauth_bridge.login_popup: the redirect of a successful login at the issuer."""
+    if not PENDING_LOGINS:
+        return None
+    return {"code": [f"code-{PENDING_LOGINS.pop()}"], "state": [state], "iss": [ISSUER]}
+
+
 @pytest.fixture
 def wire(monkeypatch):
+    for name in ("AUTH_ISSUER", "AUTH_REDIRECT_URI", "BACKEND_API_URL"):
+        monkeypatch.delenv(name, raising=False)
+    PENDING_LOGINS.clear()
+
     def install(assistant, ticketing=None):
-        monkeypatch.setattr("getnet_web.api.APIClient", assistant)
         monkeypatch.setattr("getnet_web.api.get_session_client", assistant)
+        monkeypatch.setattr("getnet_web.oauth.exchange_code", assistant.exchange_code)
+        monkeypatch.setattr("getnet_web.oauth.refresh", assistant.refresh)
+        monkeypatch.setattr("getnet_web.oauth_bridge.login_popup", fake_login_window)
         if ticketing is not None:
             monkeypatch.setattr("getnet_web.ticketing.get_ticketing_client", ticketing)
         return assistant, ticketing
@@ -173,11 +211,11 @@ def real_app(**state):
     return app
 
 
-def login(app, username="op_ana", password=PASSWORD):
-    app.text_input(key="login_username").set_value(username)
-    app.text_input(key="login_password").set_value(password)
-    app.button(key="login").click().run()
-    assert not app.exception
+def login(app, username="op_ana"):
+    """The user signs in at the issuer's window and the redirect reaches this session."""
+    PENDING_LOGINS.append(username)
+    app.run()
+    assert not app.exception and not PENDING_LOGINS
     return app
 
 
@@ -204,30 +242,31 @@ def texts(app):
         ("admin", "admin:default", ["Atendimento", "Resultados", "Administração"]),
     ],
 )
-def test_login_by_user_and_password_opens_the_areas_of_the_role(wire, role, sub, tabs):
+def test_login_by_redirection_opens_the_areas_of_the_role(wire, role, sub, tabs):
     assistant, _ = wire(FakeAssistant(role, sub), FakeTicketing())
     app = real_app()
-    assert not app.tabs and any("usuário e senha" in str(item.value) for item in app.warning)
-    assert not [item for item in app.sidebar.text_input if "chave" in item.label.lower()]  # key login removed
-    login(app, sub.split(":")[1], PASSWORD)
-    assert assistant.logins == [(sub.split(":")[1], PASSWORD)]
+    assert not app.tabs and any("janela de login" in str(item.value) for item in app.warning)
+    # no user, password or key field in this interface: the only text input is the backend address
+    assert [item.label for item in app.text_input] == ["URL da API backend"]
+    login(app, sub.split(":")[1])
+    assert assistant.logins == [sub.split(":")[1]]
     assert [tab.label for tab in app.tabs] == tabs
     assert app.session_state["api_role"] == role and app.session_state["api_principal"] == sub
-    state = repr(app.session_state)
-    assert PASSWORD not in state and PASSWORD not in texts(app)  # never kept nor shown
+    access, refresh = app.session_state["api_token"], app.session_state["api_refresh_token"]
+    assert refresh == "refresh-synthetic-1"
+    assert access not in texts(app) and refresh not in texts(app)  # kept in the session, never shown
 
 
-def test_wrong_password_shows_a_neutral_message(wire, monkeypatch):
+def test_refused_code_exchange_shows_a_neutral_message(wire):
     class Refusing(FakeAssistant):
-        def login(self, username, password):
-            raise APIError(400, "invalid_grant", "Invalid credentials.")
+        def exchange_code(self, _client, _attempt, code):
+            raise refused()
 
     wire(Refusing("merchant"), FakeTicketing())
-    app = login(real_app(), "cliente1988", "wrong-password")
-    errors = " ".join(str(item.value) for item in app.sidebar.error)
-    assert "Usuário ou senha incorretos" in errors and "wrong-password" not in errors
-    assert "wrong-password" not in repr(app.session_state)
-    assert not app.tabs
+    app = login(real_app(), "cliente1988")
+    warnings = " ".join(str(item.value) for item in app.sidebar.warning)
+    assert "Não foi possível entrar" in warnings and "code-cliente1988" not in warnings
+    assert app.session_state["api_token"] is None and not app.tabs
 
 
 def test_logout_revokes_and_returns_to_login(wire):
@@ -235,7 +274,8 @@ def test_logout_revokes_and_returns_to_login(wire):
     app = login(real_app(), "cliente1988")
     app.button(key="logout").click().run()
     assert assistant.revoked == 1 and app.session_state["api_token"] is None
-    assert not app.tabs
+    assert assistant.revoked_refresh == ["refresh-synthetic-1"]  # the refresh family is revoked with the access token
+    assert app.session_state["api_refresh_token"] is None and not app.tabs
 
 
 def test_expired_token_goes_back_to_login_with_a_clear_message(wire):
@@ -245,6 +285,7 @@ def test_expired_token_goes_back_to_login_with_a_clear_message(wire):
         api_role="merchant",
         api_principal="merchant:cliente1988",
         api_token_exp=time.time() - 10,
+        api_base_url=BASE_URL,
     )
     assert app.session_state["api_token"] is None and not app.tabs
     assert any("expirou" in str(item.value) for item in app.sidebar.warning)
@@ -252,7 +293,7 @@ def test_expired_token_goes_back_to_login_with_a_clear_message(wire):
 
 def test_backend_401_invalid_token_also_ends_the_session(wire):
     wire(FakeAssistant("merchant", profiles_error=APIError(401, "invalid_token", "Token expired.")), FakeTicketing())
-    app = real_app(api_token="synthetic-session", api_role="merchant")
+    app = real_app(api_token="synthetic-session", api_role="merchant", api_base_url=BASE_URL)
     assert app.session_state["api_token"] is None
     assert any("expirou" in str(item.value) for item in app.sidebar.warning)
 
@@ -415,38 +456,20 @@ def test_attendance_marks_the_attendant_turn(wire):
 # --- HTTP clients ------------------------------------------------------------------------------------------------------
 
 
-def test_password_grant_follows_the_contract_and_rfc6749_errors():
+def test_revocation_follows_the_contract_and_the_session_helpers():
     observed = []
 
     def handle(request):
         observed.append(request)
-        if request.url.path == "/v1/auth/revoke":
-            return httpx.Response(204)
-        form = dict(urllib.parse.parse_qsl(request.content.decode()))
-        if form["password"] == "bad":
-            return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Invalid credentials."})
-        if form["password"] == "many":
-            return httpx.Response(429, json={"error": "invalid_request"}, headers={"Retry-After": "30"})
-        return httpx.Response(200, json={"access_token": make_token(), "token_type": "Bearer", "expires_in": 3600})
+        return httpx.Response(200)
 
-    client = APIClient("https://backend.invalid", transport=httpx.MockTransport(handle))
-    session = client.login("op_ana", PASSWORD)
-    form = dict(urllib.parse.parse_qsl(observed[0].content.decode()))
-    assert observed[0].url.path == "/v1/auth/token"
-    assert observed[0].headers["content-type"] == "application/x-www-form-urlencoded"
-    assert form == {"grant_type": "password", "username": "op_ana", "password": PASSWORD,
-                    "client_id": "merchant-assistant-web"}
-    assert token_claims(session["access_token"])["role"] == "operator"
+    client = APIClient("https://backend.invalid", token=make_token(), transport=httpx.MockTransport(handle))
+    assert not hasattr(client, "login")  # the password grant is no longer used by this interface
     client.logout()
-    assert observed[1].url.path == "/v1/auth/revoke" and observed[1].headers["authorization"].startswith("Bearer ")
-    with pytest.raises(APIError) as bad:
-        client.login("op_ana", "bad")
-    assert (bad.value.status_code, bad.value.code) == (400, "invalid_grant")
-    with pytest.raises(APIError) as many:
-        client.login("op_ana", "many")
-    assert many.value.code == "too_many_attempts" and "30" in str(many.value)
+    assert observed[0].url.path == "/v1/auth/revoke" and observed[0].headers["authorization"].startswith("Bearer ")
+    assert observed[0].content == b""  # without a refresh token only the access token is revoked
     assert session_ended(APIError(401, "token_required", "x")) and not session_ended(APIError(403, "x", "y"))
-    assert token_claims("not-a-jwt") == {}
+    assert token_claims(make_token())["role"] == "operator" and token_claims("not-a-jwt") == {}
     client.close()
 
 
@@ -484,7 +507,7 @@ def test_unconfirmed_revocation_is_announced(wire):
     """P3-1: the session ends locally and the screen says the backend did not confirm the revocation."""
 
     class Unreachable(FakeAssistant):
-        def logout(self):
+        def logout(self, refresh_token=None):
             raise httpx.ConnectError("backend down")
 
     wire(Unreachable("merchant", "merchant:cliente1988"), FakeTicketing())
@@ -1145,7 +1168,7 @@ INPUT_WIDGETS = {
     "audio_input", "chat_input", "segmented_control", "pills", "feedback", "data_editor",
 }
 NO_KEY_BY_DESIGN = {"URL da API backend"}  # the backend address is the browser's choice, not the user's
-KEPT_BY_DESIGN = {"mode", "sim_role", "login_username", "login_password"}  # the sidebar; the login keys leave on submit
+KEPT_BY_DESIGN = {"mode", "sim_role"}  # the sidebar
 
 
 def test_every_input_widget_has_a_key_that_is_dropped_with_the_conversation():

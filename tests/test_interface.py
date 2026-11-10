@@ -376,6 +376,7 @@ def test_kb_confirmation_controls_enable_once_without_form_submission(monkeypatc
     monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: api)
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10)
     app.session_state["api_token"] = "synthetic-session"
+    app.session_state["api_base_url"] = "http://localhost:8000"  # where it was issued
     app.session_state["api_role"] = "admin"
     app.run()
     app.selectbox(key="mode").select("Real (API)").run()
@@ -473,6 +474,7 @@ def _real_app_with_fake_chat_api(
     monkeypatch.setattr("getnet_web.api.get_session_client", lambda *_args, **_kwargs: api)
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10)
     app.session_state["api_token"] = "synthetic-session"
+    app.session_state["api_base_url"] = "http://localhost:8000"  # where it was issued
     app.session_state["api_role"] = "demo"
     app.session_state["conversation_id"] = conversation_id
     app.session_state["backend_message_count"] = backend_message_count

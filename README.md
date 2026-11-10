@@ -24,11 +24,15 @@ streamlit run app.py
 
 
 
-Choose **Simulado** for a fully local fixture flow, **Gravado** to replay a saved synthetic response, or **Real (API)** and sign in with a user name and password of the backend (v0.7.0: `POST /v1/auth/token`, password grant, public client `merchant-assistant-web`). The token stays in the Streamlit session only; the password is never stored or shown; **Encerrar sessão** revokes the token, and an expired token returns to the login with a message. Provider keys are never entered in this interface.
+Choose **Simulado** for a fully local fixture flow, **Gravado** to replay a saved synthetic response, or **Real (API)** and use **Entrar** to sign in (v0.13.0: authorization code with PKCE S256 and a rotating refresh token; the interface has no user or password field and never uses the password grant). **Entrar** opens the backend's login page (`/v1/auth/authorize`) in a popup, so allow popups for the interface. After the login the backend sends the popup back to `AUTH_REDIRECT_URI` with `code`, `state` and `iss`; that page renders nothing of the app and hands the parameters, once, to the waiting tab, which closes the popup (if the browser keeps it open, the popup asks to be closed). Only the waiting session holds the PKCE verifier: it checks `state` and the exact `iss`, refuses repeated parameters or an `error`, and only then exchanges the code, once per attempt even if the same redirect arrives again. An unfinished login starts over after five minutes.
 
 
 
-The backend README explains how to run the backend with Docker; its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case#streamlit-interface) section covers the backend this interface signs in to with a user name and password (v0.7.0). Sharing by public IP is described in the v0.6.0 [demonstration guide](https://github.com/lauroPereira/ai-getnet-case/blob/67736304ef948db41b082aea9b1b1b20c3f912b5/docs/guia-demonstracao.md), kept in the backend history.
+The access and refresh tokens stay in the Streamlit session on the server and are never shown. The access token is renewed 30 seconds before it expires; the old refresh token is sent once and never retried, so a failed or lost renewal, or one that answers for another principal, ends the session (for a lost one the interface first tries, once, to revoke the login with the old refresh token; this only works while the access token is still valid, so after a long idle period the unreceived rotation stays valid until the refresh token expires). Changing the backend URL ends the session and revokes it at the backend that issued it. **Encerrar sessão** revokes the access token and the whole login (its refresh family); if the backend does not confirm it, the screen says so. Provider keys are never entered in this interface.
+
+
+
+The backend README explains how to run the backend with Docker; its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case#streamlit-interface) section covers the backend this interface signs in to. Its `OAUTH_REDIRECT_URIS` must list `AUTH_REDIRECT_URI` exactly, and `AUTH_ISSUER` must be its `JWT_ISSUER`: `http://127.0.0.1:8000` by default, `http://api:8000` with its `docker compose`. Open the interface at the address of `AUTH_REDIRECT_URI` (for example `http://localhost:8501/`, not `http://127.0.0.1:8501/`): the popup reaches the waiting tab only on the same origin. The login is offered only while the backend URL is `BACKEND_API_URL`, the address paired with `AUTH_ISSUER`: another address typed in the sidebar gets a warning and never receives a code or verifier. Sharing by public IP is described in the v0.6.0 [demonstration guide](https://github.com/lauroPereira/ai-getnet-case/blob/67736304ef948db41b082aea9b1b1b20c3f912b5/docs/guia-demonstracao.md), kept in the backend history.
 
 
 
@@ -66,12 +70,14 @@ Errors show what happened and the recovery action (refresh by GET, wait, start a
 | `BACKEND_TIMEOUT_SECONDS` | `20` | Reads and administrative calls |
 
 | `TICKETING_URL` | `http://127.0.0.1:8002` | Ticketing service used by the operator's Ticketing area |
-| `AUTH_CLIENT_ID` | `merchant-assistant-web` | Public client sent with the password grant |
+| `AUTH_CLIENT_ID` | `merchant-assistant-web` | Public client registered in the backend |
+| `AUTH_ISSUER` | `http://127.0.0.1:8000` | The backend's `JWT_ISSUER`, compared exactly with the `iss` of the redirect (`http://api:8000` with the backend's `docker compose`) |
+| `AUTH_REDIRECT_URI` | `http://localhost:8501/` | This interface's address, registered exactly in the backend's `OAUTH_REDIRECT_URIS` |
 | `BACKEND_MESSAGE_TIMEOUT_SECONDS` | `105` | Calls that wait for paid work (message, Router comparison, evaluation, candidate build/test): backend `MAX_REQUEST_SECONDS` (90) plus a margin |
 
 
 
-To share the interface, run `streamlit run app.py --server.address 0.0.0.0 --server.port 8501` (add `--server.sslCertFile` and `--server.sslKeyFile` for HTTPS) with the backend API kept on `127.0.0.1`.
+To share the interface, run `streamlit run app.py --server.address 0.0.0.0 --server.port 8501` (add `--server.sslCertFile` and `--server.sslKeyFile` for HTTPS) with the backend API kept on `127.0.0.1`. Since v0.13.0 the login popup opens the backend's `/v1/auth/authorize` in the user's browser, so remote users also need that page reachable at `BACKEND_API_URL` (for example behind the same HTTPS proxy), and the interface's public `https` address must be in `AUTH_REDIRECT_URI` and in the backend's `OAUTH_REDIRECT_URIS` (plain `http` is accepted only on the loopback).
 
 
 
@@ -108,6 +114,10 @@ Navigation, tab changes, reruns and chart selections do not send POST requests, 
 
 
 Install the test extra (`python -m pip install -e ".[test]"`, which includes Ruff) and run `python tools/scripts/lint_and_tests.py --strict`. v0.6.0 passed **42 web tests** and Ruff (strict script exit 0) with fixtures and fake transports; the backend strict script passed **349 tests**. Independent review and real QA through this interface are apt ([result](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/evidence/v060-resultado.md)). Earlier results are in the backend evidence ([v0.5.0](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/evidence/v050-resultado.md)).
+
+
+
+The redirect login (v0.13.0) is covered by `tests/test_oauth_primitives.py` and `tests/test_oauth_interface.py` (a fake issuer on `httpx.MockTransport`); `tests/test_oauth_backend_integration.py` runs the same client against the backend in process when the backend package is on the path, and is skipped otherwise.
 
 
 
