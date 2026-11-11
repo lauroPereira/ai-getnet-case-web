@@ -235,8 +235,13 @@ def send_chat_message(api, payload, message_text):
     }
     if is_real:
         st.session_state.pending_message = pending
+    body = payload | {"conversation_id": conversation_id}
+    resumed = st.session_state.resumed or {}
+    if resumed.get("displayed_operator_message_id") and resumed.get("conversation_id") == conversation_id:
+        # the attendant's reply shown in the resumed history counts as delivered: this message gets its own answer
+        body["displayed_operator_message_id"] = resumed["displayed_operator_message_id"]
     try:
-        result = api.send_message(payload | {"conversation_id": conversation_id})
+        result = api.send_message(body)
     except httpx.TransportError:
         return False
     except APIError:
@@ -343,10 +348,7 @@ def find_pending_reply(conversation, pending):
 
 RESUME_ROLES = ("merchant", "demo")  # roles whose token has a merchant of its own (backend v1.1.0, D2)
 RESUME_FAILED = "Não foi possível retomar a última conversa. Uma conversa nova foi iniciada."
-RESUME_PENDING_REPLY = (
-    "A resposta da atendente ainda não tinha sido entregue nesta conversa: ela volta como resposta da sua próxima "
-    "mensagem."
-)
+LIST_MISSING = (404, 405)  # a backend before v1.1.0 has no conversation list: nothing to resume, no notice
 
 
 def stamp(value):
@@ -372,10 +374,13 @@ def history_from_conversation(conversation):
 def resume_last_conversation(api):
     """After a login with no conversation in the session, brings back the merchant's latest one (GET only, no cost):
     the list gives its id, the conversation by id its history, and the next message goes to the same id. No
-    conversation keeps the current behaviour; a failure says so briefly and leaves a new conversation."""
+    conversation keeps the current behaviour; a failure says so briefly and leaves a new conversation. When the
+    attendant's reply shown in the history was not delivered yet, its `message_id` goes with the next message."""
     st.session_state.resume_checked = True
+    listed = False
     try:
         latest = next(iter(api.list_conversations(limit=1)), None)
+        listed = True
         if latest is None:
             return
         conversation = api.conversation(latest["conversation_id"])
@@ -385,12 +390,21 @@ def resume_last_conversation(api):
         if session_ended(exc):
             end_session(SESSION_EXPIRED)
             st.rerun()
+        if not listed and exc.status_code in LIST_MISSING:
+            return
         st.session_state.resume_notice = RESUME_FAILED
         return
     except (httpx.TransportError, KeyError, TypeError, AttributeError):
         st.session_state.resume_notice = RESUME_FAILED
         return
     last = next((item for item in reversed(messages) if item.get("role") == "assistant"), {})
+    shown = None
+    if latest.get("pending_operator_reply"):
+        shown = next(
+            (item.get("message_id") for item in reversed(messages)
+             if item.get("role") == "assistant" and is_operator_turn(item)),
+            None,
+        )
     st.session_state.update(
         chat_history=history,
         conversation_id=latest["conversation_id"],
@@ -405,7 +419,7 @@ def resume_last_conversation(api):
         resumed={
             "conversation_id": latest["conversation_id"],
             "updated_at": latest.get("updated_at"),
-            "pending_operator_reply": bool(latest.get("pending_operator_reply")),
+            "displayed_operator_message_id": shown if isinstance(shown, int) and shown > 0 else None,
         },
     )
 
@@ -1437,8 +1451,6 @@ with attendance_tab:
     resumed = st.session_state.resumed
     if resumed and resumed["conversation_id"] == st.session_state.conversation_id:
         st.info(f"Conversa retomada · última atividade em {stamp(resumed['updated_at'])}")
-        if resumed["pending_operator_reply"]:
-            st.caption(RESUME_PENDING_REPLY)
     if (st.session_state.conversation_id or st.session_state.chat_history) and st.button(
         "Nova conversa", key="new_conversation"
     ):

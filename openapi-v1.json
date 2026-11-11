@@ -3,7 +3,7 @@
   "info": {
     "title": "Getnet Merchant Assistant",
     "description": "Multi-agent support system: Router, Knowledge, Customer Support, Escalation and Personality.",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/v1/auth/token": {
@@ -3442,6 +3442,19 @@
               }
             ],
             "title": "Scenario Id"
+          },
+          "displayed_operator_message_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Displayed Operator Message Id",
+            "description": "Optional (v1.1.0). `message_id` of the attendant's turn the interface already showed from `GET /v1/conversations/{conversation_id}`. When it is an undelivered attendant turn of this conversation, it counts as delivered and this message is answered normally; any other id changes nothing."
           }
         },
         "additionalProperties": false,

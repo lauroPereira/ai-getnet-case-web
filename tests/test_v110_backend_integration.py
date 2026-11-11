@@ -1,7 +1,8 @@
 """Opt-in (backend v1.1.0, task 110): the interface's client reads the conversation list and the conversation by id of
 the real backend, in process (scripted model, no key, no network, no cost). A merchant signs in by the login page,
 hands off a conversation and an attendant replies; the list gives that conversation with its protocol and the pending
-reply, the conversation by id gives the attendant's turn. Operators get 403.
+reply, the conversation by id gives the attendant's turn, and the next message that confirms that turn gets its own
+answer. Operators get 403.
 
 Skipped unless the backend package is importable (see test_oauth_backend_integration.py for how to run it)."""
 
@@ -54,6 +55,16 @@ def test_the_client_lists_and_reads_the_merchants_latest_conversation(backend): 
         last = conversation["messages"][-1]
         assert (last["role"], last["via"], last["text"], last["protocol"]) == ("assistant", "operator", REPLY, protocol)
         assert [m["role"] for m in conversation["messages"]] == ["merchant", "assistant", "assistant"]
+
+        # the interface confirms the reply it showed: the next message gets its own answer, not the reply again
+        answered = api.send_message({
+            "message": "E quando cai na conta?", "conversation_id": conversation_id, "profile_id": "reference",
+            "profile_version": 1, "router_mechanism": "llm", "displayed_operator_message_id": last["message_id"],
+        })["message"]
+        assert answered["route"] != "human_reply" and answered["via"] == "agent" and answered["answer"] != REPLY
+        assert api.list_conversations(limit=1)[0]["pending_operator_reply"] is False
+        texts = [m["text"] for m in api.conversation(conversation_id)["messages"]]
+        assert texts.count(REPLY) == 1 and texts[3] == "E quando cai na conta?"
 
         with pytest.raises(APIError) as refused:
             api.list_conversations(limit=21)

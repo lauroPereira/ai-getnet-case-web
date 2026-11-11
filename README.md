@@ -51,7 +51,7 @@ Areas by role: merchant and demo see Atendimento and Resultados; operators see o
 
 
 
-**Reloading the page (v1.1.0).** The conversation is kept by the backend, so reloading the page, opening a new tab or signing in again does not lose it. After a merchant or demo login with no conversation in the session, the interface reads the latest conversation of the signed-in merchant (`GET /v1/conversations?limit=1`, then `GET /v1/conversations/{id}`, both without cost), shows its history with the attendant's turns marked **Atendente humano**, says **Conversa retomada** with the date of its last activity, and sends the next message to the same conversation. **Nova conversa** starts another one in this session; nothing is deleted in the backend, and Resultados keeps the runs of this session. With no earlier conversation the screen starts empty, as before; if the list or the conversation cannot be read, a short notice appears and a new conversation starts. An attendant's reply that the backend has not delivered yet shows in the history and also comes back as the answer to the next message, which is when the backend delivers it. Admin sessions, Simulado and Gravado start with a new conversation.
+**Reloading the page (v1.1.0).** The conversation is kept by the backend, so reloading the page, opening a new tab or signing in again does not lose it. After a merchant or demo login with no conversation in the session, the interface reads the latest conversation of the signed-in merchant (`GET /v1/conversations?limit=1`, then `GET /v1/conversations/{id}`, both without cost), shows its history with the attendant's turns marked **Atendente humano**, says **Conversa retomada** with the date of its last activity, and sends the next message to the same conversation. **Nova conversa** starts another one in this session; nothing is deleted in the backend, and Resultados keeps the runs of this session. With no earlier conversation, or with a backend before v1.1.0 that has no conversation list, the screen starts empty, as before; if the list or the conversation cannot be read, a short notice appears and a new conversation starts. An attendant's reply that the backend has not delivered yet shows in the history once: the next message carries its `message_id` (`displayed_operator_message_id`), so the backend counts it as delivered and that message gets its own answer. Admin sessions, Simulado and Gravado start with a new conversation.
 
 
 
@@ -100,7 +100,7 @@ The browser opens the login at `AUTH_AUTHORIZE_URL` and comes back to `AUTH_REDI
 
 
 
-`openapi-v1.json` is the backend contract snapshot (v1.1.0: backend commit `3f941fc`, with `GET /v1/conversations` and the availability fields of `GET /v1/profiles`; exported with the demonstration routes off). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
+`openapi-v1.json` is the backend contract snapshot (v1.1.0: backend commit `213978c`, with `GET /v1/conversations`, the availability fields of `GET /v1/profiles` and `displayed_operator_message_id` in `POST /v1/messages`; exported with the demonstration routes off). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
 
 
 

@@ -18,6 +18,7 @@ from .test_interface import ROOT
 from .test_v070_interface import (  # noqa: F401 (wire is a fixture)
     HANDOFF_MESSAGE,
     OPERATOR_LABEL,
+    OPERATOR_MESSAGE,
     OPERATOR_TURN,
     PROTOCOL,
     FakeTicketing,
@@ -43,7 +44,11 @@ HANDOFF_TURNS = [
 
 class ResumeChat(ScriptedChat):
     """The assistant with the merchant's conversations: `stored` maps an id to its turns, newest conversation last.
-    A sent message lands in the conversation of its id. `list_error` and `conversation_error` make the reads fail."""
+    A sent message lands in the conversation of its id. `list_error` and `conversation_error` make the reads fail.
+
+    Delivery as the backend does it: each turn's `message_id` is its position; an attendant's turn not yet delivered
+    is the answer to the next message (D8) unless that message carries its `displayed_operator_message_id` (v1.1.0),
+    which marks it and the older ones as delivered so the message gets its own answer."""
 
     def __init__(self, *args, stored=None, list_error=None, conversation_error=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -51,11 +56,28 @@ class ResumeChat(ScriptedChat):
         self.list_error, self.conversation_error = list_error, conversation_error
         self.lists: list[int] = []
         self.reads: list[str] = []
+        self.delivered: set[tuple[str, int]] = set()
+
+    def pending(self, conversation_id):
+        return [
+            number for number, turn in enumerate(self.stored.get(conversation_id, []), start=1)
+            if turn.get("via") == "operator" and (conversation_id, number) not in self.delivered
+        ]
 
     def send_message(self, payload):
-        self.turns = self.stored.pop(payload["conversation_id"], [])  # the turns of that conversation, now the newest
+        conversation_id = payload["conversation_id"]
+        waiting = self.pending(conversation_id)
+        shown = payload.get("displayed_operator_message_id")
+        if shown in waiting:
+            self.delivered |= {(conversation_id, number) for number in waiting if number <= shown}
+            waiting = [number for number in waiting if number > shown]
+        if waiting:  # D8: the oldest reply not delivered is the answer to this message
+            self.delivered.add((conversation_id, waiting[0]))
+            text = self.stored[conversation_id][waiting[0] - 1]["text"]
+            self.outcomes.insert(0, OPERATOR_MESSAGE | {"answer": text})
+        self.turns = self.stored.pop(conversation_id, [])  # the turns of that conversation, now the newest
         answer = super().send_message(payload)
-        self.stored[payload["conversation_id"]] = self.turns
+        self.stored[conversation_id] = self.turns
         return answer
 
     def list_conversations(self, limit=5):
@@ -65,8 +87,8 @@ class ResumeChat(ScriptedChat):
         items = [
             {"conversation_id": conversation_id, "state": "handoff", "created_at": "2026-11-10T09:12:04-03:00",
              "updated_at": UPDATED_AT, "handoff_protocol": PROTOCOL,
-             "pending_operator_reply": any(turn.get("via") == "operator" for turn in turns)}
-            for conversation_id, turns in reversed(self.stored.items())
+             "pending_operator_reply": bool(self.pending(conversation_id))}
+            for conversation_id in reversed(self.stored)
         ]
         return items[:limit]
 
@@ -74,7 +96,8 @@ class ResumeChat(ScriptedChat):
         self.reads.append(conversation_id)
         if self.conversation_error:
             raise self.conversation_error
-        return {"conversation_id": conversation_id, "state": "handoff", "messages": list(self.stored[conversation_id])}
+        messages = [turn | {"message_id": number} for number, turn in enumerate(self.stored[conversation_id], start=1)]
+        return {"conversation_id": conversation_id, "state": "handoff", "messages": messages}
 
 
 def merchant_app(wire, chat):  # noqa: F811 (the fixture's value)
@@ -98,7 +121,7 @@ def test_a_new_login_resumes_the_latest_conversation_with_the_attendant_turn(wir
     assert attendant_labels(app) == [OPERATOR_LABEL]
     assert app.session_state["backend_message_count"] == 3
     assert "Conversa retomada · última atividade em 10/11/2026 09:14" in [str(item.value) for item in app.info]
-    assert "ela volta como resposta da sua próxima mensagem" in texts(app)
+    assert "próxima mensagem" not in texts(app)  # no notice about the reply coming back: it does not
     assert f"protocolo {PROTOCOL}" in texts(app)  # the case line shows the protocol of the conversation's case
 
     app.run()  # a rerun reads nothing again
@@ -106,8 +129,54 @@ def test_a_new_login_resumes_the_latest_conversation_with_the_attendant_turn(wir
 
     send(app, "Obrigado pela resposta")
     assert chat.payloads[-1]["conversation_id"] == RESUMED_ID  # the next message goes to the resumed conversation
+    assert chat.payloads[-1]["displayed_operator_message_id"] == 3  # the attendant's turn already on screen
     assert app.session_state["conversation_id"] == RESUMED_ID
     assert not any("Conversa retomada" in str(item.value) for item in app.info)  # the notice lasts until then
+
+
+def test_the_next_message_gets_its_own_answer_and_the_reply_shows_once(wire):  # noqa: F811
+    chat = ResumeChat("merchant", "merchant:cliente1988", stored={RESUMED_ID: list(HANDOFF_TURNS)},
+                      outcomes=["fixture", "fixture"])
+    app = merchant_app(wire, chat)
+    send(app, "E quando cai na conta?")
+    history = app.session_state["chat_history"]
+    assert [turn["text"] for turn in history].count(OPERATOR_TURN["text"]) == 1
+    assert history[-2] == {"role": "user", "text": "E quando cai na conta?"}
+    assert history[-1]["role"] == "assistant" and "via" not in history[-1]  # the assistant's answer to the question
+    assert attendant_labels(app) == [OPERATOR_LABEL]
+    recorded = chat.conversation(RESUMED_ID)["messages"]  # the screen matches the history the backend now records
+    assert [(turn["role"], turn["text"]) for turn in history] == [
+        ("user" if turn["role"] == "merchant" else "assistant", turn["text"]) for turn in recorded
+    ]
+
+    send(app, "Obrigado")  # only the first message after the resume confirms the reply
+    assert "displayed_operator_message_id" not in chat.payloads[-1]
+
+
+def test_a_reply_already_delivered_is_not_confirmed_again(wire):  # noqa: F811
+    chat = ResumeChat("merchant", "merchant:cliente1988",
+                      stored={RESUMED_ID: [*HANDOFF_TURNS, merchant_turn("Alguma novidade?")]}, outcomes=["fixture"])
+    chat.delivered.add((RESUMED_ID, 3))  # delivered by "Alguma novidade?" before the merchant left
+    app = merchant_app(wire, chat)
+    assert app.session_state["conversation_id"] == RESUMED_ID
+    send(app, "Obrigado")
+    assert "displayed_operator_message_id" not in chat.payloads[-1]
+
+
+def test_a_reply_written_after_the_resume_is_still_delivered_once(wire):  # noqa: F811
+    """Race: the attendant writes again after the interface loaded the history. The reply on screen counts as
+    delivered; the newer one, never shown, is the answer to this message and appears once."""
+    chat = ResumeChat("merchant", "merchant:cliente1988", stored={RESUMED_ID: list(HANDOFF_TURNS)},
+                      outcomes=["fixture"])
+    app = merchant_app(wire, chat)
+    newer = OPERATOR_TURN | {"text": "Complementando: o valor já foi conciliado."}
+    chat.stored[RESUMED_ID].append(newer)
+    send(app, "Obrigado")
+    assert chat.payloads[-1]["displayed_operator_message_id"] == 3
+    texts_on_screen = [turn["text"] for turn in app.session_state["chat_history"]]
+    assert texts_on_screen.count(OPERATOR_TURN["text"]) == 1 and texts_on_screen.count(newer["text"]) == 1
+    assert app.session_state["chat_history"][-1]["via"] == "operator"
+    assert chat.outcomes == ["fixture"]  # the merchant's own answer was not produced: the newer reply was
 
 
 def test_reloading_the_page_brings_back_the_conversation_and_the_reply_written_meanwhile(wire):  # noqa: F811
@@ -182,6 +251,19 @@ def test_a_failed_resume_warns_briefly_and_starts_a_new_conversation(wire, failu
     assert not app.warning and chat.lists == [1]  # said once, never retried by a rerun
     send(app, "Pergunta depois da falha")
     assert chat.payloads[-1]["conversation_id"] not in {None, RESUMED_ID}
+
+
+@pytest.mark.parametrize("status", [404, 405])
+def test_a_backend_without_the_list_means_nothing_to_resume_without_a_notice(wire, status):  # noqa: F811
+    """A backend before v1.1.0 answers the list with 404 (or 405): there is nothing to resume, not a failure."""
+    chat = ResumeChat("merchant", "merchant:cliente1988", stored={RESUMED_ID: list(HANDOFF_TURNS)},
+                      outcomes=["fixture"], list_error=APIError(status, "http_error", "Not Found"))
+    app = merchant_app(wire, chat)
+    assert not app.exception and not app.warning and chat.lists == [1] and chat.reads == []
+    assert app.session_state["chat_history"] == [] and app.session_state["conversation_id"] is None
+    send(app, "Primeira pergunta")
+    assert chat.payloads[-1]["conversation_id"] not in {None, RESUMED_ID}
+    assert "displayed_operator_message_id" not in chat.payloads[-1]
 
 
 def test_a_401_on_the_list_ends_the_session(wire):  # noqa: F811
@@ -263,3 +345,26 @@ def test_openapi_snapshot_declares_the_conversation_list():
         "conversation_id", "state", "created_at", "updated_at", "handoff_protocol", "pending_operator_reply"
     }
     assert OPERATIONS["list_conversations"] == ("GET", "/v1/conversations")
+    assert schema["info"]["version"] == "1.1.0"
+
+
+def test_openapi_snapshot_declares_the_displayed_reply_confirmation():
+    request = json.loads((ROOT / "openapi-v1.json").read_text(encoding="utf-8"))["components"]["schemas"][
+        "V1MessageRequest"
+    ]
+    field = request["properties"]["displayed_operator_message_id"]
+    assert {"type": "integer", "minimum": 1} in field["anyOf"] and {"type": "null"} in field["anyOf"]
+    assert "displayed_operator_message_id" not in request["required"]
+
+
+def test_http_client_sends_the_confirmation_in_the_message_body():
+    observed = []
+
+    def handle(request):
+        observed.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"answer": "ok"}, "run": None})
+
+    client = APIClient("https://backend.invalid", token="synthetic-session", transport=httpx.MockTransport(handle))
+    client.send_message({"message": "Oi", "conversation_id": RESUMED_ID, "displayed_operator_message_id": 3})
+    assert observed[0]["displayed_operator_message_id"] == 3
+    client.close()
