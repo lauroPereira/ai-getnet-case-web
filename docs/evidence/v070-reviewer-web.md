@@ -1,6 +1,6 @@
-# Reviewer v0.7.0 (Time B, projeto web)
+# Revisão independente da interface: v0.7.0
 
-Pareceres do Reviewer independente do Time B sobre o projeto web na v0.7.0. Gravado pelo Supervisor a partir do relatório do Reviewer (que não tem escrita).
+Resultado: apta na sexta verificação, candidato `cd7d55d`, script estrito com 92 testes aprovados; validada com a pilha da v0.7.0 no [resultado da versão](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/evidence/v070-resultado.md). Abaixo, o registro de cada verificação da [tarefa 67](../tasks/67-interface-operador-web.md), como foi feito.
 
 ## Tarefa 67, rodada 1 — apto para QA
 

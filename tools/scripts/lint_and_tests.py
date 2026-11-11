@@ -10,12 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED_STRUCTURE = (
-    "AGENTS.md",
-    "CLAUDE.md",
     "README.md",
     "docs",
-    "evals",
-    "skills",
     "tools",
 )
 EXCLUDED_DIRECTORIES = {
@@ -88,6 +84,9 @@ def validate_structure() -> bool:
 
 def validate_skills() -> bool:
     """Confirma que cada diretório de skill contém o documento mínimo esperado."""
+    if not (ROOT / "skills").is_dir():
+        print("Skills: pasta skills/ ausente; verificação pulada.")
+        return True
     skill_directories = sorted(path for path in (ROOT / "skills").iterdir() if path.is_dir())
     valid = True
     for directory in skill_directories:

@@ -17,18 +17,22 @@ Base validada; contratos OpenAPI do backend definidos antes das telas.
 1. Gerar cliente e fixtures de contrato; criar modo simulado sem APIs pagas.
 2. Implementar chat/perfis/toggle/comparação e inspeção sem credenciais de provedores.
 3. Verificar estados/autorizações/reruns por AppTest e servidor HTTP simulado.
-4. Fixar hashes, passar por Reviewer e QA independentes antes de integração.
+4. Fixar o candidato por hashes e submetê-lo a revisão independente e validação funcional antes da integração.
 
 ## Critérios de conclusão
 
-- [ ] Critérios da especificação demonstrados por testes e história.
-- [ ] Nenhuma chamada causada só por rerun; integração real distinguida da simulada.
-- [ ] Candidato identificado e pareceres independentes registrados.
+- [x] Critérios da especificação demonstrados por testes e história.
+- [x] Nenhuma chamada causada só por rerun; integração real distinguida da simulada.
+- [x] Candidato identificado, com revisão independente e validação funcional registradas.
 
-## Validação
+## Resultado
 
-Pendente de implementação.
+Interface v0.4.0 pela API `/v1`: chat contínuo, perfis versionados, Router LLM ou JEV por requisição, comparação só dos Routers, inspeção de resultados e modos Simulado e Gravado, sem chave de provedor.
+14 testes da interface e Ruff limpos; transporte HTTP real com inferência programada, sem chamada paga. O Router JEV com chave real foi percorrido pela interface na v1.1.0.
+Evidência: [resultado da v0.4.0](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/evidence/v040-resultado.md) e [da v1.1.0](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/evidence/v110-resultado.md).
 
 ## Status
 
-Pronta para o Developer após a preparação da base pelo Supervisor.
+```text
+concluída (v0.4.0)
+```
