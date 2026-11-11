@@ -1,4 +1,6 @@
-# Passagem do Developer (web): v0.7.0
+# Registro de implementação da interface: v0.7.0
+
+Login, áreas por papel e tela de Ticketing da [tarefa 67](../tasks/67-interface-operador-web.md), em seis entregas; a última, candidato `cd7d55d`, passou com 92 testes no script estrito e foi aprovada na [revisão independente](v070-reviewer-web.md). Abaixo, o registro de cada entrega, como foi feito.
 
 ## Tarefa 67, rodada 1
 
