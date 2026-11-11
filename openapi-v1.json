@@ -325,13 +325,66 @@
           "v1"
         ],
         "summary": "Profiles",
+        "description": "Profiles visible to the role. Since v1.1.0 (D3) each profile has `available` (every provider of its attendance\nagents has a key configured in the backend) and `missing_providers` (the providers without one, empty when\navailable), and the answer has `router_mechanisms` (`llm` always true; `jev` true only with `TYPESAFE_API_KEY`). No\nkey value is returned. Sending an unavailable choice still gets `503 provider_unavailable`.",
         "operationId": "profiles_v1_profiles_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {},
+                "example": {
+                  "profiles": [
+                    {
+                      "profile_id": "hybrid",
+                      "name": "Hybrid",
+                      "version": 1,
+                      "state": "published",
+                      "agents": {
+                        "router": {
+                          "provider": "deepseek",
+                          "model": "deepseek-flash",
+                          "parameters": {}
+                        },
+                        "knowledge": {
+                          "provider": "openai",
+                          "model": "gpt-6-luna",
+                          "parameters": {}
+                        },
+                        "support": {
+                          "provider": "openai",
+                          "model": "gpt-6-luna",
+                          "parameters": {}
+                        },
+                        "escalation": {
+                          "provider": "openai",
+                          "model": "gpt-6-luna",
+                          "parameters": {}
+                        },
+                        "personality": {
+                          "provider": "openai",
+                          "model": "gpt-6-luna",
+                          "parameters": {}
+                        },
+                        "evaluation": {
+                          "provider": "openai",
+                          "model": "gpt-6-luna",
+                          "parameters": {}
+                        }
+                      },
+                      "digest": "9c1e0f4b2a7d6e5f8a3b1c2d4e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
+                      "demo_allowed": true,
+                      "available": false,
+                      "missing_providers": [
+                        "deepseek"
+                      ]
+                    }
+                  ],
+                  "router_mechanisms": {
+                    "llm": true,
+                    "jev": false
+                  }
+                }
               }
             }
           }

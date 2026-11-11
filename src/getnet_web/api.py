@@ -154,7 +154,12 @@ class APIClient:
         return self._request("model_catalog")
 
     def profiles(self) -> list[dict]:
-        return self._request("list_profiles")["profiles"]
+        return self.profile_listing()["profiles"]
+
+    def profile_listing(self) -> dict:
+        """The whole `GET /v1/profiles` answer: `profiles` and, from a v1.1.0 backend, `router_mechanisms` and each
+        profile's `available` and `missing_providers` (never a key value)."""
+        return self._request("list_profiles")
 
     def compare(self, payload: dict) -> dict:
         return self._request("compare_routers", body=payload)

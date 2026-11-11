@@ -55,6 +55,10 @@ Areas by role: merchant and demo see Atendimento and Resultados; operators see o
 
 
 
+**Profiles and Router engines this backend can run (v1.1.0).** The backend says, in `GET /v1/profiles`, which profiles have a key for the provider of each of their agents and whether the JEV Router has one, never the key itself. A profile without it shows **indisponível neste backend** and is not sent; the JEV without `TYPESAFE_API_KEY` is disabled in Atendimento, in the Router-only comparison (which always calls both Routers) and in the profile comparison. A sentence names the key the backend is missing (`DEEPSEEK_API_KEY` for Hybrid and Adjusted, `TYPESAFE_API_KEY` for the JEV). The defaults are an available profile and Router: Hybrid starts on the LLM Router when the JEV is unavailable. A backend before v1.1.0 sends none of this, and every option stays as before; Simulado and Gravado too.
+
+
+
 Errors show what happened and the recovery action (refresh by GET, wait, start a new session or ask the administrator); no internal error is displayed. A transport failure (timeout) during a candidate build, test, activation or rollback discards the estimate and the confirmations and asks for a reload (GET) before any repetition, so a paid action is never repeated blindly. When `LOCK_BACKEND_URL` is on, Simulado offers only the demo role.
 
 
@@ -96,7 +100,7 @@ The browser opens the login at `AUTH_AUTHORIZE_URL` and comes back to `AUTH_REDI
 
 
 
-`openapi-v1.json` is the backend contract snapshot (v1.1.0: backend commit `9d3b25d`, with `GET /v1/conversations`; exported with the demonstration routes off). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
+`openapi-v1.json` is the backend contract snapshot (v1.1.0: backend commit `3f941fc`, with `GET /v1/conversations` and the availability fields of `GET /v1/profiles`; exported with the demonstration routes off). The ticketing service has its own client in `src/getnet_web/ticketing.py`. Regenerate the route map after an approved API change:
 
 
 
