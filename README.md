@@ -42,7 +42,7 @@ Choose a mode in the sidebar:
 - **Gravado** replays a saved synthetic response.
 - **Real (API)** talks to a running backend; **Entrar** signs in on the backend's login page.
 
-The backend runs with Docker as described in its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case#streamlit-interface)
+The backend runs with Docker as described in its [Streamlit interface](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/wiki/guides/interface-and-tunnel.md#streamlit-interface)
 section. The two sides are paired by three settings:
 
 - The backend's `OAUTH_REDIRECT_URIS` lists `AUTH_REDIRECT_URI` exactly.
@@ -176,7 +176,7 @@ never edited in place.
 
 ### Share the interface
 
-The backend's demonstration tunnel ([Open the demonstration through a tunnel](https://github.com/lauroPereira/ai-getnet-case#open-the-demonstration-through-a-tunnel))
+The backend's demonstration tunnel ([Open the demonstration through a tunnel](https://github.com/lauroPereira/ai-getnet-case/blob/main/docs/wiki/guides/interface-and-tunnel.md#open-the-demonstration-through-a-tunnel))
 publishes one origin with this interface and the backend's login page, and no other backend route.
 `docker compose --profile tunnel up` starts the proxy, and `cloudflared tunnel --url http://localhost:8080` gives it an
 `https://<name>.trycloudflare.com` address. Start the interface with that address for the browser and the internal one
