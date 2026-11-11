@@ -163,6 +163,26 @@ def test_a_reply_already_delivered_is_not_confirmed_again(wire):  # noqa: F811
     assert "displayed_operator_message_id" not in chat.payloads[-1]
 
 
+def test_with_two_attendant_turns_the_confirmation_names_the_latest(wire):  # noqa: F811
+    """The first attendant turn was delivered before the merchant left; a second one was not. The next message
+    confirms the second (the newest on screen), gets its own answer, and each attendant turn shows once."""
+    second = OPERATOR_TURN | {"text": "Complementando: o valor já foi conciliado."}
+    chat = ResumeChat("merchant", "merchant:cliente1988",
+                      stored={RESUMED_ID: [*HANDOFF_TURNS, merchant_turn("Alguma novidade?"), second]},
+                      outcomes=["fixture"])
+    chat.delivered.add((RESUMED_ID, 3))  # the first reply answered "Alguma novidade?"
+    app = merchant_app(wire, chat)
+    assert app.session_state["conversation_id"] == RESUMED_ID
+    assert attendant_labels(app) == [OPERATOR_LABEL, OPERATOR_LABEL]
+    send(app, "Obrigado")
+    assert chat.payloads[-1]["displayed_operator_message_id"] == 5  # the latest attendant turn, not the first (3)
+    on_screen = [turn["text"] for turn in app.session_state["chat_history"]]
+    assert on_screen.count(OPERATOR_TURN["text"]) == 1 and on_screen.count(second["text"]) == 1
+    assert app.session_state["chat_history"][-1]["role"] == "assistant"
+    assert "via" not in app.session_state["chat_history"][-1]  # the message got its own answer
+    assert chat.pending(RESUMED_ID) == []
+
+
 def test_a_reply_written_after_the_resume_is_still_delivered_once(wire):  # noqa: F811
     """Race: the attendant writes again after the interface loaded the history. The reply on screen counts as
     delivered; the newer one, never shown, is the answer to this message and appears once."""
