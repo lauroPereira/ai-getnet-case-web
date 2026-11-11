@@ -20,3 +20,22 @@ htmlcov/
 .codex/
 .claude/settings.local.json
 discovery/
+
+# Ferramental local de desenvolvimento (fica no disco, fora do controle de versão)
+/AGENTS.md
+/CLAUDE.md
+/.agent-template.json
+/skills/
+/.claude/
+/.agents/
+/evals/
+/docs/wiki/agents/
+/docs/wiki/origem-template.md
+/docs/wiki/origem-template-hashes.json
+/docs/templates/passagem-de-papel.md
+/docs/templates/modelo-skill.md
+/docs/templates/modelo-workflow.md
+/docs/templates/modelo-analise-tarefa.md
+/tools/scripts/validate-agent-flow.ps1
+/tools/scripts/sync-skills.ps1
+/tools/scripts/validate-project.ps1
